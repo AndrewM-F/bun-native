@@ -102,7 +102,7 @@ test('a verified package set becomes publishable package directories in dependen
       '@babel/core': '7.29.13',
       'babel-preset-solid': '1.9.19',
     })
-    expect(solid.peerDependencies).toEqual({ 'solid-js': '1.9.19' })
+    expect(solid.peerDependencies).toEqual({ 'solid-js': '1.9.20' })
     await expect(main(['--package-set', manifest, '--outdir', output])).rejects.toThrow()
   })
 })

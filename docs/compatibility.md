@@ -38,7 +38,7 @@ names, or when two sources for one pin disagree.
 | `rust`               | `1.98.1`                                   | [`toolchain.json`][toolchain] `rust.version`                                                                         |
 | `gpui revision`      | `ba63a022c9a22ca66d68ef2a8f0bb9b5b0a9984d` | [`toolchain.json`][toolchain] and both GPUI crates in [`gpui-host`][host-manifest]                                   |
 | `gpui`               | `0.2.2`                                    | [`toolchain.json`][toolchain] `gpui.version`                                                                         |
-| `solid-js`           | `1.9.19`                                   | [`@bun-native/solid`][solid-pin] and root `package.json`                                                             |
+| `solid-js`           | `1.9.20`                                   | [`@bun-native/solid`][solid-pin] and root `package.json`                                                             |
 | `babel-preset-solid` | `1.9.19`                                   | [`@bun-native/solid`][solid-pin] and root `package.json`; Babel 8 stays excluded under [#316][i316]                  |
 | `@babel/core`        | `7.29.13`                                  | [`@bun-native/solid`][solid-pin] and root `package.json`                                                             |
 | `react`              | `19.3.1`                                   | [`@bun-native/react`][react-pin] and root `package.json`                                                             |
