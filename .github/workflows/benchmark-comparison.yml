@@ -10,7 +10,7 @@ on:
       diagnostic:
         description: Run only the macOS phase trace diagnostic
         type: choice
-        options: ['none', 'macos-phase']
+        options: ['none', 'macos-phase', 'macos-wake']
         default: 'none'
       trials:
         description: Measured timed trials per artifact (3 to 30)
@@ -58,7 +58,7 @@ concurrency:
 jobs:
   linux:
     name: Linux core/Solid/React development and AOT comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || inputs.diagnostic != 'macos-phase') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || (inputs.diagnostic != 'macos-phase' && inputs.diagnostic != 'macos-wake')) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -233,7 +233,7 @@ jobs:
   # The hosted VM's paravirtual Metal device is not a physical GPU.
   macos:
     name: macOS core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || inputs.diagnostic != 'macos-phase') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || (inputs.diagnostic != 'macos-phase' && inputs.diagnostic != 'macos-wake')) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: macos-15
     timeout-minutes: 60
     defaults:
@@ -316,7 +316,7 @@ jobs:
   # benchmarks/comparison/windows-processes.ts. The VM has no physical GPU.
   windows:
     name: Windows core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || inputs.diagnostic != 'macos-phase') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || (inputs.diagnostic != 'macos-phase' && inputs.diagnostic != 'macos-wake')) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 75
     defaults:
@@ -429,7 +429,7 @@ jobs:
 
   macos-phase:
     name: macOS command and frame phase diagnostic
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'macos-phase'
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && (inputs.diagnostic == 'macos-phase' || inputs.diagnostic == 'macos-wake')
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -452,8 +452,10 @@ jobs:
         run: |
           bun benchmarks/comparison/run.ts --host "$GITHUB_WORKSPACE/target/release/bun-native-host" --host-profile release \
             --output "$RUNNER_TEMP/macos-phase/calibration" --adapters core --trials 3 --iterations 1000 --rotations 10 --mounts 1 --rows 32 --input-trials 0
-      - name: Measure alternating traced and untraced launches
+      - name: Measure alternating diagnostic launches
         timeout-minutes: 25
+        env:
+          PAIR_WAKE_TEST: ${{ inputs.diagnostic == 'macos-wake' && '1' || '0' }}
         run: |
           set -euo pipefail
           python3 benchmarks/phase-investigation/paired.py "$RUNNER_TEMP/macos-phase/calibration/core/application" \

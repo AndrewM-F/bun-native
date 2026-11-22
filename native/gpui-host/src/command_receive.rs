@@ -23,7 +23,20 @@ struct Wakes {
 struct RecordingWake {
     inner: Waker,
     events: Arc<Mutex<Wakes>>,
+    wake_run_loop: bool,
 }
+
+// Diagnostic-only intervention: run after the GPUI waker has enqueued its
+// runnable. The result says nothing about whether the run loop was asleep.
+#[cfg(target_os = "macos")]
+fn wake_main_run_loop() {
+    if let Some(run_loop) = objc2_core_foundation::CFRunLoop::main() {
+        run_loop.wake_up();
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn wake_main_run_loop() {}
 
 impl Wake for RecordingWake {
     fn wake(self: Arc<Self>) {
@@ -42,6 +55,9 @@ impl Wake for RecordingWake {
             events.count = events.count.saturating_add(1);
         }
         self.inner.wake_by_ref();
+        if self.wake_run_loop {
+            wake_main_run_loop();
+        }
     }
 }
 
@@ -51,12 +67,15 @@ pub(crate) async fn receive<T>(
     let mut suspended = false;
     let mut receive = std::pin::pin!(receiver.recv());
     let events = crate::phases::enabled().then(|| Arc::new(Mutex::new(Wakes::default())));
+    let wake_run_loop = events.is_some()
+        && std::env::var_os("BUN_NATIVE_DIAGNOSTIC_RUNLOOP_WAKE").is_some_and(|value| value == "1");
     poll_fn(|cx| {
         let resumed = events.as_ref().map(|_| Instant::now());
         let result = if let Some(events) = &events {
             let waker = Waker::from(Arc::new(RecordingWake {
                 inner: cx.waker().clone(),
                 events: events.clone(),
+                wake_run_loop,
             }));
             receive.as_mut().poll(&mut Context::from_waker(&waker))
         } else {
@@ -124,6 +143,7 @@ mod tests {
         let waker = Waker::from(Arc::new(RecordingWake {
             inner: Waker::from(counter.clone()),
             events: events.clone(),
+            wake_run_loop: false,
         }));
         waker.wake_by_ref();
         waker.wake();

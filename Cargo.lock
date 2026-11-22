@@ -600,6 +600,7 @@ dependencies = [
  "gpui_macos",
  "gpui_platform",
  "log",
+ "objc2-core-foundation",
  "pty-process",
  "raw-window-handle",
  "rustix",

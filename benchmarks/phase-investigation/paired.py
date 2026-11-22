@@ -22,15 +22,19 @@ profile = os.environ.get("PAIR_HOST_PROFILE", "release")
 if profile not in ("dev", "release"):
     raise ValueError("Invalid host profile")
 base_env["BUN_NATIVE_HOST_PROFILE"] = profile
+wake_test = os.environ.get("PAIR_WAKE_TEST") == "1"
 rows = []
 for trial in range(24):
-    traced = (False, True, True, False)[trial % 4]
+    intervention = wake_test and (False, True, True, False)[trial % 4]
+    traced = wake_test or (False, True, True, False)[trial % 4]
     report_path = output / f"launch-{trial:02}.json"
     trace_path = output / f"trace-{trial:02}.json"
     nonce = f"phase-control-{trial:02}"
     env = base_env.copy()
     if traced:
         env["BUN_NATIVE_PHASE_TRACE"] = str(trace_path)
+    if intervention:
+        env["BUN_NATIVE_DIAGNOSTIC_RUNLOOP_WAKE"] = "1"
     args = [
         str(app),
         "--host",
@@ -85,6 +89,7 @@ for trial in range(24):
         row = {
             "trial": trial,
             "traced": traced,
+            "intervention": intervention,
             "warmup": trial < 4,
             "p50Ms": statistics.median(samples),
             "selected14to20": sum(14 <= value <= 20 for value in samples),
