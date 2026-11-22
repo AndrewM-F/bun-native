@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.2](https://github.com/AndrewM-F/bun-native/compare/v0.37.1...v0.37.2) (2026-11-22)
+
+
+### Maintenance
+
+* **deps:** group compatible dependency updates ([#747](https://github.com/AndrewM-F/bun-native/issues/747)) ([3d71cc0](https://github.com/AndrewM-F/bun-native/commit/3d71cc0c34e78bdbfc0db9b4950a6ae9f87a272b))
+
 ## [0.37.1](https://github.com/AndrewM-F/bun-native/compare/v0.37.0...v0.37.1) (2026-11-22)
 
 
