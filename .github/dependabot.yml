@@ -20,6 +20,9 @@ updates:
     multi-ecosystem-group: dependencies
     patterns: ['*']
     ignore:
+      # Solid 2 removes the 1.x universal renderer used by our adapter.
+      - dependency-name: 'solid-js'
+        update-types: ['version-update:semver-major']
       # Solid's pinned preset requires Babel 7; qualify the next major in #316.
       - dependency-name: '@babel/core'
         update-types: ['version-update:semver-major']
