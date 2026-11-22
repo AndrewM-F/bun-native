@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.37.1](https://github.com/AndrewM-F/bun-native/compare/v0.37.0...v0.37.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **deps:** update url for origin recursion advisory ([#741](https://github.com/AndrewM-F/bun-native/issues/741)) ([eb9332e](https://github.com/AndrewM-F/bun-native/commit/eb9332ed8db698e81a26213060aa33b9d12286c2))
+
+
+### Performance
+
+* **core,protocol:** reduce event and tree validation overhead ([#738](https://github.com/AndrewM-F/bun-native/issues/738)) ([492f2e0](https://github.com/AndrewM-F/bun-native/commit/492f2e0e9cc15cd2d95958e91dd579383b81ded1))
+
 ## [0.37.0](https://github.com/AndrewM-F/bun-native/compare/v0.36.0...v0.37.0) (2026-11-19)
 
 
