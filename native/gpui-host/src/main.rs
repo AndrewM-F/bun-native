@@ -1,4 +1,5 @@
 mod channel;
+mod command_receive;
 mod evidence;
 #[cfg(any(target_os = "macos", test))]
 mod frame_pacing;
@@ -49,7 +50,18 @@ fn main() {
                 let executor = cx.background_executor().clone();
                 let mut turn_started = executor.now();
                 let mut commands_in_turn = 0;
-                while let Ok(incoming) = commands.recv().await {
+                let mut budget_exhausted = false;
+                while let Ok((incoming, suspended)) = command_receive::receive(&commands).await {
+                    if suspended {
+                        // A pending receive returned control to the executor.
+                        turn_started = executor.now();
+                        commands_in_turn = 0;
+                    } else if budget_exhausted {
+                        // Ready receives do not yield to native input or paint.
+                        executor.timer(COMMAND_YIELD_DELAY).await;
+                        turn_started = executor.now();
+                        commands_in_turn = 0;
+                    }
                     cx.update(|cx| match incoming {
                         Incoming::Command(command) => session.dispatch(command, cx),
                         Incoming::InvalidFrame => session.finish(
@@ -66,17 +78,8 @@ fn main() {
                         break;
                     }
                     commands_in_turn += 1;
-                    if commands_in_turn >= COMMANDS_PER_TURN
-                        || executor.now() - turn_started >= COMMAND_TIME_BUDGET
-                    {
-                        // A ready receiver does not suspend this foreground
-                        // future. Give native input and paint a turn between
-                        // complete atomic commands, even under a full queue.
-                        // GPUI's zero-duration timer is ready immediately.
-                        executor.timer(COMMAND_YIELD_DELAY).await;
-                        turn_started = executor.now();
-                        commands_in_turn = 0;
-                    }
+                    budget_exhausted = commands_in_turn >= COMMANDS_PER_TURN
+                        || executor.now() - turn_started >= COMMAND_TIME_BUDGET;
                 }
                 phases::write();
             })
