@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       diagnostic:
-        description: Run only the Windows retention candidate control instead of the full benchmark
+        description: Run a single diagnostic instead of the full benchmark
         type: choice
-        options: ['none', 'windows-retention']
+        options: ['none', 'windows-retention', 'linux-scheduler']
         default: 'none'
       trials:
         description: Measured timed trials per artifact (3 to 30)
@@ -58,7 +58,7 @@ concurrency:
 jobs:
   linux:
     name: Linux core/Solid/React development and AOT comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || inputs.diagnostic != 'windows-retention') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || inputs.diagnostic == 'none') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -233,7 +233,7 @@ jobs:
   # The hosted VM's paravirtual Metal device is not a physical GPU.
   macos:
     name: macOS core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || inputs.diagnostic != 'windows-retention') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || inputs.diagnostic == 'none') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: macos-15
     timeout-minutes: 60
     defaults:
@@ -316,7 +316,7 @@ jobs:
   # benchmarks/comparison/windows-processes.ts. The VM has no physical GPU.
   windows:
     name: Windows core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || inputs.diagnostic != 'windows-retention') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'workflow_dispatch' || inputs.diagnostic == 'none') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 75
     defaults:
@@ -510,4 +510,71 @@ jobs:
             !${{ runner.temp }}/windows-retention/**/*.exe
             !${{ runner.temp }}/windows-retention/package/
             !${{ runner.temp }}/windows-retention/*.tgz
+          retention-days: 30
+
+  linux-scheduler:
+    name: Linux paired scheduler control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'linux-scheduler'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      PYTHONDONTWRITEBYTECODE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+      - uses: ./.github/actions/linux-native-prerequisites
+      - name: Checkout baseline and candidate sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 492f2e0e9cc15cd2d95958e91dd579383b81ded1
+          path: .diagnostics/scheduler-baseline
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: c4a502e68c8286857ad61a302094c2199a6001c3
+          path: .diagnostics/scheduler-candidate
+          persist-credentials: false
+      - name: Build exact hosts and one AOT workload
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/scheduler-pairs"
+          mkdir "$root"
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/scheduler-target"
+          for item in baseline candidate; do
+            src="$GITHUB_WORKSPACE/.diagnostics/scheduler-$item"
+            if [[ "$item" == baseline ]]; then expected=492f2e0e9cc15cd2d95958e91dd579383b81ded1; else expected=c4a502e68c8286857ad61a302094c2199a6001c3; fi
+            [[ $(git -C "$src" rev-parse HEAD) == "$expected" ]]
+            (cd "$src" && cargo build --locked --release -p bun-native-host --bin bun-native-host) 2>&1 | tee "$root/$item-build.log"
+            cp "$CARGO_TARGET_DIR/release/bun-native-host" "$root/$item-host"
+          done
+          sha256sum "$root/"*-host > "$root/host-sha256.txt"
+          export CONTROL_ROOT="$root"
+          bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"solid",entry:"benchmarks/solid/direct.ts",outdir:process.env.CONTROL_ROOT + "/core",cwd:process.cwd()})'
+          bun --no-install compile --no-script --production --explain=json "$root/core/application.js" --outfile "$root/application" > "$root/compile.log" 2>&1
+          bun -e 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const g=inspectBunExecutable(process.argv[1]); const r=inspectBunRuntime(process.argv[1]); if (!g.hasCompiledProgram || r.jit !== "unused") throw new Error("Not AOT"); console.log(JSON.stringify({g,r},null,2))' "$root/application" > "$root/inspection.json"
+          sha256sum "$root/application" "$root/core/application.js" > "$root/application-sha256.txt"
+          { uname -a; lscpu; rustc -Vv; bun --revision; } > "$root/environment.txt"
+      - name: Compare alternating hosts in one X11 session
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/scheduler-pairs"
+          bash scripts/quality/native-x11-session.sh "$RUNNER_TEMP/scheduler-session" -- \
+            bash -c 'set -euo pipefail; root="$1"; python3 benchmarks/comparison/scheduler-pairs.py "$root/application" "$root/baseline-host" "$root/candidate-host" "$root/first"; PAIR_REVERSED=1 python3 benchmarks/comparison/scheduler-pairs.py "$root/application" "$root/baseline-host" "$root/candidate-host" "$root/repeat"; python3 benchmarks/comparison/scheduler-pairs.py "$root/application" "$root/baseline-host" "$root/baseline-host" "$root/aa"' _ "$root" | tee "$root/paired.log"
+      - name: Retain paired evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-scheduler-pairs
+          path: |
+            ${{ runner.temp }}/scheduler-pairs/
+            !${{ runner.temp }}/scheduler-pairs/*-host
+            !${{ runner.temp }}/scheduler-pairs/application
           retention-days: 30
