@@ -83,7 +83,7 @@ describe('package export/import materialization (source reads only)', () => {
     expect(manifests['@bun-native/solid']!.dependencies).toMatchObject({
       '@babel/core': '7.29.13',
       'babel-preset-solid': '1.9.19',
-      'solid-js': '1.9.19',
+      'solid-js': '1.9.20',
     })
     expect(manifests['@bun-native/react']!.dependencies).toMatchObject({
       react: '19.3.1',

@@ -234,7 +234,7 @@ describe('standalone package source contracts (inert fixtures; no install, app b
           expect(pkg.scripts.dev).toStartWith('MIMALLOC_PURGE_DELAY=0 bun --no-install ')
           expect(pkg.scripts.build).not.toContain('MIMALLOC')
           expect(pkg.dependencies[framework === 'solid' ? 'solid-js' : 'react']).toBe(
-            framework === 'solid' ? '1.9.19' : '19.3.1'
+            framework === 'solid' ? '1.9.20' : '19.3.1'
           )
           expect(pkg.devDependencies['@types/bun']).toBe('1.4.4')
           if (framework === 'react')
