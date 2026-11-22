@@ -20,6 +20,14 @@ on:
       streaming-trials:
         description: Streaming-list soaks per framework and mode (1 to 10)
         default: '3'
+      visible-pairs:
+        description: Hosted visible fixture (off, 0 for smoke, or 3 to 20 pairs)
+        type: string
+        default: 'off'
+      visible-stream:
+        description: Qualify the optional capture stream in smoke mode only
+        type: boolean
+        default: false
       concurrent-jit:
         description: Diagnostic for #629. 'off' sets BUN_JSC_useConcurrentJIT=0 for every launch; assertions are unchanged
         type: choice
@@ -53,7 +61,7 @@ concurrency:
 jobs:
   linux:
     name: Linux core/Solid/React development and AOT comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs['visible-pairs'] == 'off')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -228,7 +236,7 @@ jobs:
   # The hosted VM's paravirtual Metal device is not a physical GPU.
   macos:
     name: macOS core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs['visible-pairs'] == 'off')
     runs-on: macos-15
     timeout-minutes: 60
     defaults:
@@ -311,7 +319,7 @@ jobs:
   # benchmarks/comparison/windows-processes.ts. The VM has no physical GPU.
   windows:
     name: Windows core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs['visible-pairs'] == 'off')
     runs-on: windows-2022
     timeout-minutes: 75
     defaults:
@@ -420,4 +428,135 @@ jobs:
             !${{ runner.temp }}/comparison/run/*/application.exe
           include-hidden-files: true
           if-no-files-found: error
+          retention-days: 30
+
+  electrobun-smoke:
+    name: Electrobun visible-input fixture smoke
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs['visible-pairs'] != 'off' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: macos-15
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      STREAM_CONTROL: ${{ inputs['visible-stream'] }}
+      VISIBLE_PAIRS: ${{ inputs['visible-pairs'] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare isolated fixture and evidence directory
+        run: |
+          [[ "$VISIBLE_PAIRS" =~ ^(0|[3-9]|1[0-9]|20)$ ]] || { echo 'visible-pairs must be 0 or 3 to 20' >&2; exit 1; }
+          if [[ "$STREAM_CONTROL" == 'true' && "$VISIBLE_PAIRS" != '0' ]]; then
+            echo 'Stream qualification is a separate smoke-only run' >&2; exit 1
+          fi
+          mkdir "$RUNNER_TEMP/eb-smoke" "$RUNNER_TEMP/eb-source" "$RUNNER_TEMP/eb-inner"
+          cp -R benchmarks/electrobun/app/. "$RUNNER_TEMP/eb-source/"
+          {
+            sw_vers
+            uname -a
+            system_profiler SPHardwareDataType SPDisplaysDataType
+          } > "$RUNNER_TEMP/eb-smoke/environment.txt"
+      - name: Install pinned toolchain and workspace dependencies
+        uses: ./.github/actions/native-toolchain
+      - name: Build pinned Electrobun reference
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/eb-source"
+          BUN_INSTALL_CACHE_DIR="$RUNNER_TEMP/eb-bun-cache" bunx electrobun@2.0.6 build --env=stable 2>&1 | tee "$RUNNER_TEMP/eb-smoke/build.log"
+          archive="$RUNNER_TEMP/eb-source/artifacts/stable-macos-arm64-workload-baseline.app.tar.zst"
+          shasum -a 256 "$archive" > "$RUNNER_TEMP/eb-smoke/archive.sha256"
+          /usr/bin/tar -tf "$archive" > "$RUNNER_TEMP/eb-smoke/archive-files.txt"
+          /usr/bin/tar -tvf "$archive" > "$RUNNER_TEMP/eb-smoke/archive-details.txt"
+          awk 'BEGIN { ok=1; n=0 } { n++; if ($0 !~ /^workload-baseline\.app\// || $0 ~ /(^|\/)\.\.(\/|$)/) ok=0 } END { if (!n || !ok) exit 1 }' "$RUNNER_TEMP/eb-smoke/archive-files.txt"
+          if grep -Eq '^[lh]' "$RUNNER_TEMP/eb-smoke/archive-details.txt"; then
+            echo 'Reference archive contains links; refusing extraction.' >&2
+            exit 1
+          fi
+          /usr/bin/tar -xf "$archive" -C "$RUNNER_TEMP/eb-inner"
+      - name: Compile owned-window and offline OCR helpers
+        run: |
+          xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework AppKit -framework CoreGraphics -framework ApplicationServices scripts/quality/native-platform-macos.m -o "$RUNNER_TEMP/eb-smoke/window-helper"
+          xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework Foundation -framework CoreGraphics -framework ImageIO -framework Vision benchmarks/electrobun/observe-text-macos.m -o "$RUNNER_TEMP/eb-smoke/text-helper"
+      - name: Compile the optional stream helper
+        if: inputs['visible-stream'] == true
+        run: |
+          xcrun swiftc -parse-as-library benchmarks/electrobun/real-window-stream-probe.swift -o "$RUNNER_TEMP/eb-smoke/stream-helper" -framework AppKit -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework CoreGraphics
+          "$RUNNER_TEMP/eb-smoke/stream-helper" --self-test > "$RUNNER_TEMP/eb-smoke/stream-self-test.txt"
+      - name: Qualify owned window, OS click and captured label
+        run: |
+          args=()
+          if [[ "$STREAM_CONTROL" == 'true' ]]; then args+=(--stream-helper "$RUNNER_TEMP/eb-smoke/stream-helper"); fi
+          bun benchmarks/electrobun/visible-smoke-macos.ts "${args[@]}" \
+            --app "$RUNNER_TEMP/eb-inner/workload-baseline.app" \
+            --output "$RUNNER_TEMP/eb-smoke/run" \
+            --helper "$RUNNER_TEMP/eb-smoke/window-helper" \
+            --ocr "$RUNNER_TEMP/eb-smoke/text-helper"
+      - name: Build the native release host and inspected Core AOT fixture
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p bun-native-host --bin bun-native-host 2>&1 | tee "$RUNNER_TEMP/eb-smoke/native-host-build.log"
+          cp target/release/bun-native-host "$RUNNER_TEMP/eb-smoke/native-host"
+          shasum -a 256 "$RUNNER_TEMP/eb-smoke/native-host" > "$RUNNER_TEMP/eb-smoke/native-host.sha256"
+          bun benchmarks/electrobun/build-native.ts --output "$RUNNER_TEMP/eb-smoke/native-build"
+      - name: Qualify native AOT window, OS click and captured label
+        run: |
+          args=()
+          if [[ "$STREAM_CONTROL" == 'true' ]]; then args+=(--stream-helper "$RUNNER_TEMP/eb-smoke/stream-helper"); fi
+          bun benchmarks/electrobun/visible-smoke-macos.ts "${args[@]}" \
+            --native-app "$RUNNER_TEMP/eb-smoke/native-build/application" \
+            --native-host "$RUNNER_TEMP/eb-smoke/native-host" \
+            --output "$RUNNER_TEMP/eb-smoke/native-run" \
+            --helper "$RUNNER_TEMP/eb-smoke/window-helper" \
+            --ocr "$RUNNER_TEMP/eb-smoke/text-helper"
+      - name: Check both qualified reports and native build identity
+        run: |
+          bun -e '
+            import assert from "node:assert/strict";
+            import { join } from "node:path";
+            const root = join(process.env.RUNNER_TEMP, "eb-smoke");
+            const read = async (path) => Bun.file(join(root, path)).json();
+            const [reference, native, build, refApp, nativeApp] = await Promise.all([
+              read("run/result.json"), read("native-run/result.json"), read("native-build/build.json"),
+              read("run/application.json"), read("native-run/application.json"),
+            ]);
+            assert.equal(reference.status, "passed");
+            assert.equal(native.status, "passed");
+            assert.equal(native.artifacts.launcher.sha256, build.binary.sha256);
+            assert.equal(native.artifacts.launcher.bytes, build.binary.bytes);
+            assert.equal(native.artifacts.inspection.hasCompiledProgram, true);
+            if (process.env.STREAM_CONTROL === "true") {
+              assert.ok(reference.streamEvidence, "Reference stream evidence missing");
+              assert.ok(native.streamEvidence, "Native stream evidence missing");
+            }
+            assert.equal(refApp.workload.rows, 32);
+            assert.equal(nativeApp.workload.rows, 32);
+            assert.equal(nativeApp.workload.scenario, "visible-input");
+          '
+      - name: Collect alternating visible-input pairs and controls
+        if: inputs['visible-pairs'] != '0'
+        env:
+          VISIBLE_PAIRS: ${{ inputs['visible-pairs'] }}
+        run: |
+          bun benchmarks/electrobun/visible-pairs-macos.ts \
+            --app "$RUNNER_TEMP/eb-inner/workload-baseline.app" \
+            --native-app "$RUNNER_TEMP/eb-smoke/native-build/application" \
+            --native-host "$RUNNER_TEMP/eb-smoke/native-host" \
+            --output "$RUNNER_TEMP/eb-smoke/pairs" \
+            --helper "$RUNNER_TEMP/eb-smoke/window-helper" \
+            --ocr "$RUNNER_TEMP/eb-smoke/text-helper" \
+            --pairs "$VISIBLE_PAIRS"
+      - name: Retain smoke evidence, including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: electrobun-visible-input-smoke-${{ runner.arch }}
+          path: |
+            ${{ runner.temp }}/eb-smoke/
+            !${{ runner.temp }}/eb-smoke/native-host
+            !${{ runner.temp }}/eb-smoke/stream-helper
+            !${{ runner.temp }}/eb-smoke/native-build/application
+            !${{ runner.temp }}/eb-smoke/native-build/module/
+          if-no-files-found: warn
           retention-days: 30
