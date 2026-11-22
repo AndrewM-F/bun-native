@@ -1,8 +1,8 @@
 //! Opt-in, bounded UI-thread phase trace for the bridge investigation (#297).
 //!
 //! Disabled unless `BUN_NATIVE_PHASE_TRACE` names a new file. When disabled,
-//! every hook is one thread-local `None` check: no clock reads, allocation or
-//! I/O. When enabled, records stay in fixed-capacity memory and are written
+//! hooks do no clock reads, allocation or I/O. When enabled, records stay in
+//! fixed-capacity memory and are written
 //! once as JSON after the command loop ends, so file I/O never runs between
 //! measured requests. The trace observes timing only; it never changes
 //! dispatch, rendering, hit testing or event delivery.
@@ -12,11 +12,41 @@ use serde_json::json;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const MAX_BATCHES: usize = 4096;
 const MAX_FRAMES: usize = 16384;
 const MAX_DRAG_STEPS: usize = 512;
+const MAX_YIELDS: usize = 4096;
+const MAX_COMMAND_DISPATCHES: usize = 4096;
+const MAX_READER_ENQUEUES: usize = 4096;
+
+struct ReaderEvents {
+    enqueues: Vec<(RequestId, Instant, Instant, bool)>,
+    dropped: u64,
+}
+
+#[derive(Clone)]
+pub(crate) struct ReaderTrace(Arc<Mutex<ReaderEvents>>);
+
+impl ReaderTrace {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(ReaderEvents {
+            enqueues: Vec::with_capacity(MAX_READER_ENQUEUES),
+            dropped: 0,
+        })))
+    }
+
+    pub(crate) fn enqueue(&self, id: RequestId, read: Instant, returned: Instant, sent: bool) {
+        let mut events = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if events.enqueues.len() == MAX_READER_ENQUEUES {
+            events.dropped += 1;
+        } else {
+            events.enqueues.push((id, read, returned, sent));
+        }
+    }
+}
 
 struct Batch {
     id: RequestId,
@@ -53,6 +83,11 @@ struct Trace {
     renders: u64,
     drag: Vec<(u64, DragStep)>,
     dropped_drag: u64,
+    yields: Vec<(u64, u64)>,
+    dropped_yields: u64,
+    command_dispatches: Vec<(RequestId, u64, u64)>,
+    dropped_command_dispatches: u64,
+    reader: ReaderTrace,
 }
 
 /// Where an external file drag was observed on the host's UI thread. GPUI's
@@ -113,6 +148,11 @@ pub(crate) fn install_from_environment() {
             renders: 0,
             drag: Vec::with_capacity(MAX_DRAG_STEPS),
             dropped_drag: 0,
+            yields: Vec::with_capacity(MAX_YIELDS),
+            dropped_yields: 0,
+            command_dispatches: Vec::with_capacity(MAX_COMMAND_DISPATCHES),
+            dropped_command_dispatches: 0,
+            reader: ReaderTrace::new(),
         });
     });
 }
@@ -121,9 +161,48 @@ pub(crate) fn enabled() -> bool {
     TRACE.with(|trace| trace.borrow().is_some())
 }
 
+/// Share a bounded reader record buffer only when tracing is enabled.
+pub(crate) fn reader_trace() -> Option<ReaderTrace> {
+    TRACE.with(|trace| trace.borrow().as_ref().map(|trace| trace.reader.clone()))
+}
+
 /// Clock read for a hook; `None` when tracing is disabled.
 pub(crate) fn now() -> Option<Instant> {
     enabled().then(Instant::now)
+}
+
+/// Record a completed fairness timer on the same clock as batches and frames.
+pub(crate) fn yielded(started: Instant, resumed: Instant) {
+    TRACE.with(|trace| {
+        let mut trace = trace.borrow_mut();
+        let Some(trace) = trace.as_mut() else {
+            return;
+        };
+        if trace.yields.len() == MAX_YIELDS {
+            trace.dropped_yields += 1;
+            return;
+        }
+        trace
+            .yields
+            .push((trace.nanos(started), duration(started, resumed)));
+    });
+}
+
+/// Read/validation to foreground dispatch, including queue backpressure.
+pub(crate) fn command_dispatch(id: RequestId, read_at: Instant, dispatched_at: Instant) {
+    TRACE.with(|trace| {
+        let mut trace = trace.borrow_mut();
+        let Some(trace) = trace.as_mut() else {
+            return;
+        };
+        if trace.command_dispatches.len() == MAX_COMMAND_DISPATCHES {
+            trace.dropped_command_dispatches += 1;
+            return;
+        }
+        trace
+            .command_dispatches
+            .push((id, trace.nanos(read_at), duration(read_at, dispatched_at)));
+    });
 }
 
 /// Phase boundaries of one acknowledged batch on the UI thread.
@@ -258,6 +337,19 @@ pub(crate) fn write() {
             ])
         })
         .collect();
+    let (reader, reader_poisoned) = match trace.reader.0.lock() {
+        Ok(reader) => (reader, false),
+        Err(error) => (error.into_inner(), true),
+    };
+    let reader_enqueues: Vec<_> = reader
+        .enqueues
+        .iter()
+        .map(|(id, read, returned, sent)| {
+            json!([id, trace.nanos(*read), trace.nanos(*returned), sent])
+        })
+        .collect();
+    let dropped_reader_enqueues = reader.dropped;
+    drop(reader);
     let record = json!({
         "schemaVersion": 1,
         "clock": "host monotonic nanoseconds since trace installation",
@@ -271,6 +363,16 @@ pub(crate) fn write() {
         "dragColumns": ["atNanos", "step"],
         "droppedDrag": trace.dropped_drag,
         "drag": trace.drag.iter().map(|(at, step)| json!([at, step.name()])).collect::<Vec<_>>(),
+        "yieldColumns": ["startedNanos", "durationNanos"],
+        "droppedYields": trace.dropped_yields,
+        "yields": trace.yields,
+        "commandDispatchColumns": ["id", "readNanos", "readToDispatchNanos"],
+        "droppedCommandDispatches": trace.dropped_command_dispatches,
+        "commandDispatches": trace.command_dispatches,
+        "readerEnqueueColumns": ["id", "readNanos", "sendReturnedNanos", "sent"],
+        "readerTracePoisoned": reader_poisoned,
+        "droppedReaderEnqueues": dropped_reader_enqueues,
+        "readerEnqueues": reader_enqueues,
         "batches": batches,
         "frames": frames,
     });
@@ -293,11 +395,95 @@ mod tests {
         // Tests never install a trace; every hook must be inert.
         assert!(!enabled());
         assert!(now().is_none());
+        assert!(reader_trace().is_none());
         assert!(render(WindowId::try_from(1).unwrap(), Instant::now(), 1).is_none());
         painted(0, 0, 0);
         drag(DragStep::Active);
+        yielded(Instant::now(), Instant::now());
+        command_dispatch(
+            RequestId::try_from(1).unwrap(),
+            Instant::now(),
+            Instant::now(),
+        );
         write();
         assert!(!enabled());
+    }
+
+    #[test]
+    fn reader_trace_records_enqueue_returns_and_bounds_storage() {
+        let (file, origin) = install();
+        let reader = reader_trace().unwrap();
+        let id = RequestId::try_from(3).unwrap();
+        let returned = origin + std::time::Duration::from_nanos(80);
+        for _ in 0..=MAX_READER_ENQUEUES {
+            reader.enqueue(id, origin, returned, true);
+        }
+        write();
+        let record = read(&file.0);
+        assert_eq!(
+            record["readerEnqueues"].as_array().unwrap().len(),
+            MAX_READER_ENQUEUES
+        );
+        assert_eq!(record["readerEnqueues"][0], json!([3, 0, 80, true]));
+        assert_eq!(record["droppedReaderEnqueues"], 1);
+        assert_eq!(record["readerTracePoisoned"], false);
+    }
+
+    #[test]
+    fn reader_trace_survives_and_reports_a_poisoned_lock() {
+        let (file, origin) = install();
+        let reader = reader_trace().unwrap();
+        let poisoned = reader.clone();
+        let thread = std::thread::spawn(move || {
+            let _guard = poisoned.0.lock().unwrap();
+            panic!("deliberately poison the diagnostic lock");
+        });
+        assert!(thread.join().is_err());
+        reader.enqueue(RequestId::try_from(1).unwrap(), origin, origin, true);
+        write();
+        let record = read(&file.0);
+        assert_eq!(record["readerTracePoisoned"], true);
+        assert_eq!(record["readerEnqueues"], json!([[1, 0, 0, true]]));
+    }
+
+    #[test]
+    fn command_dispatch_records_are_bounded_and_share_the_host_clock() {
+        let (file, origin) = install();
+        let id = RequestId::try_from(3).unwrap();
+        let dispatched = origin + std::time::Duration::from_nanos(75);
+        for _ in 0..=MAX_COMMAND_DISPATCHES {
+            command_dispatch(id, origin, dispatched);
+        }
+        write();
+        let record = read(&file.0);
+        assert_eq!(
+            record["commandDispatchColumns"],
+            json!(["id", "readNanos", "readToDispatchNanos"])
+        );
+        assert_eq!(
+            record["commandDispatches"].as_array().unwrap().len(),
+            MAX_COMMAND_DISPATCHES
+        );
+        assert_eq!(record["commandDispatches"][0], json!([3, 0, 75]));
+        assert_eq!(record["droppedCommandDispatches"], 1);
+    }
+
+    #[test]
+    fn yield_records_use_the_host_clock_and_are_bounded() {
+        let (file, origin) = install();
+        let resumed = origin + std::time::Duration::from_nanos(100);
+        for _ in 0..=MAX_YIELDS {
+            yielded(origin, resumed);
+        }
+        write();
+        let record = read(&file.0);
+        assert_eq!(
+            record["yieldColumns"],
+            json!(["startedNanos", "durationNanos"])
+        );
+        assert_eq!(record["yields"].as_array().unwrap().len(), MAX_YIELDS);
+        assert_eq!(record["yields"][0], json!([0, 100]));
+        assert_eq!(record["droppedYields"], 1);
     }
 
     #[test]
@@ -354,6 +540,11 @@ mod tests {
                 renders: 0,
                 drag: Vec::new(),
                 dropped_drag: 0,
+                yields: Vec::new(),
+                dropped_yields: 0,
+                command_dispatches: Vec::new(),
+                dropped_command_dispatches: 0,
+                reader: ReaderTrace::new(),
             });
         });
         (TemporaryTrace(path), origin)

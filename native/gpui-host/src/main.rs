@@ -58,12 +58,25 @@ fn main() {
                         commands_in_turn = 0;
                     } else if budget_exhausted {
                         // Ready receives do not yield to native input or paint.
+                        let yield_started = phases::now();
                         executor.timer(COMMAND_YIELD_DELAY).await;
+                        if let Some(started) = yield_started {
+                            phases::yielded(started, std::time::Instant::now());
+                        }
                         turn_started = executor.now();
                         commands_in_turn = 0;
                     }
                     cx.update(|cx| match incoming {
-                        Incoming::Command(command) => session.dispatch(command, cx),
+                        Incoming::Command(command, read_at) => {
+                            if let Some(read_at) = read_at {
+                                phases::command_dispatch(
+                                    command.command().id(),
+                                    read_at,
+                                    std::time::Instant::now(),
+                                );
+                            }
+                            session.dispatch(command, cx)
+                        }
                         Incoming::InvalidFrame => session.finish(
                             Event::Error {
                                 id: None,

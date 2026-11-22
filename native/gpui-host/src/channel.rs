@@ -30,7 +30,7 @@ pub(crate) enum Undelivered {
 }
 
 pub(crate) enum Incoming {
-    Command(ValidCommand),
+    Command(ValidCommand, Option<Instant>),
     InvalidFrame,
     Disconnected,
 }
@@ -133,18 +133,29 @@ pub(crate) fn connect() -> (Receiver<Incoming>, EventSink) {
     let (commands, receiver) = async_channel::bounded(64);
     let (sender, events) = sync_channel(EVENT_CAPACITY);
     let failures = commands.clone();
+    let trace_reads = crate::phases::reader_trace();
     std::thread::spawn(move || {
         let stdin = io::stdin();
         let mut input = stdin.lock();
         let mut reader = CommandReader::default();
         loop {
             let incoming = match reader.read(&mut input) {
-                Ok(Some(command)) => Incoming::Command(command),
+                Ok(Some(command)) => {
+                    Incoming::Command(command, trace_reads.as_ref().map(|_| Instant::now()))
+                }
                 Ok(None) => Incoming::Disconnected,
                 Err(_) => Incoming::InvalidFrame,
             };
-            let terminal = !matches!(incoming, Incoming::Command(_));
-            if commands.send_blocking(incoming).is_err() || terminal {
+            let terminal = !matches!(incoming, Incoming::Command(..));
+            let observation = match &incoming {
+                Incoming::Command(command, Some(read)) => Some((command.command().id(), *read)),
+                _ => None,
+            };
+            let sent = commands.send_blocking(incoming);
+            if let (Some(trace), Some((id, read))) = (&trace_reads, observation) {
+                trace.enqueue(id, read, Instant::now(), sent.is_ok());
+            }
+            if sent.is_err() || terminal {
                 break;
             }
         }
