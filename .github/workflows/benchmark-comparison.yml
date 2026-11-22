@@ -530,12 +530,12 @@ jobs:
       - name: Checkout baseline and candidate sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 492f2e0e9cc15cd2d95958e91dd579383b81ded1
+          ref: eb9332ed8db698e81a26213060aa33b9d12286c2
           path: .diagnostics/scheduler-baseline
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: c4a502e68c8286857ad61a302094c2199a6001c3
+          ref: 34d3597584d0d0afa1a794a2470916821cfd90ca
           path: .diagnostics/scheduler-candidate
           persist-credentials: false
       - name: Build exact hosts and one AOT workload
@@ -548,7 +548,7 @@ jobs:
           export CARGO_TARGET_DIR="$RUNNER_TEMP/scheduler-target"
           for item in baseline candidate; do
             src="$GITHUB_WORKSPACE/.diagnostics/scheduler-$item"
-            if [[ "$item" == baseline ]]; then expected=492f2e0e9cc15cd2d95958e91dd579383b81ded1; else expected=c4a502e68c8286857ad61a302094c2199a6001c3; fi
+            if [[ "$item" == baseline ]]; then expected=eb9332ed8db698e81a26213060aa33b9d12286c2; else expected=34d3597584d0d0afa1a794a2470916821cfd90ca; fi
             [[ $(git -C "$src" rev-parse HEAD) == "$expected" ]]
             (cd "$src" && cargo build --locked --release -p bun-native-host --bin bun-native-host) 2>&1 | tee "$root/$item-build.log"
             cp "$CARGO_TARGET_DIR/release/bun-native-host" "$root/$item-host"
