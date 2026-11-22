@@ -61,7 +61,8 @@ After the workflow is present on the target branch, dispatch
 `benchmark-comparison.yml` with `visible-pairs=0` for smoke qualification or
 `visible-pairs=10` for ten alternating pairs after warmups and A/A controls. The
 optional `visible-stream=true` is a separate smoke-only stream feasibility
-check. Reports retain all failures and screenshots; they require a hosted macOS
-runner and paths within its temporary directory. Capture timing includes observer
+check on macOS 26; the normal smoke and pairs use macOS 15. Reports retain all
+failures and screenshots; they require a hosted macOS runner and paths within its
+temporary directory. Capture timing includes observer
 overhead and is not physical display presentation. Matching the displayed fixture
 does not establish complete workload equivalence or a market-wide ranking.

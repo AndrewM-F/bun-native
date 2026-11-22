@@ -433,7 +433,8 @@ jobs:
   electrobun-smoke:
     name: Electrobun visible-input fixture smoke
     if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs['visible-pairs'] != 'off' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: macos-15
+    # Stream feasibility uses macOS 26; paired captures retain the macOS 15 cohort.
+    runs-on: ${{ inputs['visible-stream'] && 'macos-26' || 'macos-15' }}
     timeout-minutes: 75
     defaults:
       run:
