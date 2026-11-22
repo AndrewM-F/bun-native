@@ -91,7 +91,7 @@ describe('package export/import materialization (source reads only)', () => {
       '@types/react': '19.3.0',
       '@types/react-reconciler': '0.34.1',
     })
-    expect(manifests['@bun-native/cli']!.dependencies).toEqual({ oxlint: '1.93.0' })
+    expect(manifests['@bun-native/cli']!.dependencies).toEqual({ oxlint: '1.94.0' })
     const consumers = await consumerDefinitions(repository, manifests)
     for (const framework of ['solid', 'react'] as const) {
       expect(consumers[framework].devDependencies['@types/bun']).toBe('1.4.4')
