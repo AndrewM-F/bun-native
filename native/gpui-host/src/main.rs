@@ -51,7 +51,9 @@ fn main() {
                 let mut turn_started = executor.now();
                 let mut commands_in_turn = 0;
                 let mut budget_exhausted = false;
-                while let Ok((incoming, suspended)) = command_receive::receive(&commands).await {
+                while let Ok((incoming, suspended, wake)) =
+                    command_receive::receive(&commands).await
+                {
                     if suspended {
                         // A pending receive returned control to the executor.
                         turn_started = executor.now();
@@ -68,6 +70,9 @@ fn main() {
                     }
                     cx.update(|cx| match incoming {
                         Incoming::Command(command, read_at) => {
+                            if let Some(wake) = wake {
+                                phases::command_wake(command.command().id(), wake);
+                            }
                             if let Some(read_at) = read_at {
                                 phases::command_dispatch(
                                     command.command().id(),

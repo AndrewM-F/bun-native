@@ -100,12 +100,18 @@ for trial in range(24):
                     "droppedDrag",
                     "droppedYields",
                     "droppedCommandDispatches",
+                    "droppedCommandWakes",
                     "droppedReaderEnqueues",
                 )
             )
             batches = {record[0]: record for record in trace["batches"]}
             reads = {record[0]: record for record in trace["readerEnqueues"]}
             dispatches = {record[0]: record for record in trace["commandDispatches"]}
+            wakes = {record[0]: record for record in trace["commandWakes"]}
+            assert len(wakes) == len(trace["commandWakes"])
+            assert all(
+                record[3] > 0 and record[1] <= record[2] for record in wakes.values()
+            )
             assert batches[3][2] == 74 and all(
                 batches[index][2] == 1 for index in range(4, 1024)
             )
@@ -119,6 +125,7 @@ for trial in range(24):
             row["signalReadToEnqueueReturnMs"] = [
                 (reads[24 + i][2] - reads[24 + i][1]) / 1e6 for i in range(1000)
             ]
+            row["wakesObserved"] = sum(index in wakes for index in range(24, 1024))
             row["frames"] = len(trace["frames"])
         elif trace_path.exists():
             raise ValueError("Unexpected untraced phase output")

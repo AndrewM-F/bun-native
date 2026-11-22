@@ -87,6 +87,8 @@ struct Trace {
     dropped_yields: u64,
     command_dispatches: Vec<(RequestId, u64, u64)>,
     dropped_command_dispatches: u64,
+    command_wakes: Vec<(RequestId, u64, u64, u64, u64)>,
+    dropped_command_wakes: u64,
     reader: ReaderTrace,
 }
 
@@ -152,6 +154,8 @@ pub(crate) fn install_from_environment() {
             dropped_yields: 0,
             command_dispatches: Vec::with_capacity(MAX_COMMAND_DISPATCHES),
             dropped_command_dispatches: 0,
+            command_wakes: Vec::with_capacity(MAX_COMMAND_DISPATCHES),
+            dropped_command_wakes: 0,
             reader: ReaderTrace::new(),
         });
     });
@@ -185,6 +189,27 @@ pub(crate) fn yielded(started: Instant, resumed: Instant) {
         trace
             .yields
             .push((trace.nanos(started), duration(started, resumed)));
+    });
+}
+
+/// Record wake observations made by the receiver's diagnostic waker.
+pub(crate) fn command_wake(id: RequestId, wake: crate::command_receive::WakeObservation) {
+    TRACE.with(|trace| {
+        let mut trace = trace.borrow_mut();
+        let Some(trace) = trace.as_mut() else {
+            return;
+        };
+        if trace.command_wakes.len() == MAX_COMMAND_DISPATCHES {
+            trace.dropped_command_wakes += 1;
+        } else {
+            trace.command_wakes.push((
+                id,
+                trace.nanos(wake.first),
+                trace.nanos(wake.last),
+                wake.count,
+                trace.nanos(wake.resumed),
+            ));
+        }
     });
 }
 
@@ -369,6 +394,9 @@ pub(crate) fn write() {
         "commandDispatchColumns": ["id", "readNanos", "readToDispatchNanos"],
         "droppedCommandDispatches": trace.dropped_command_dispatches,
         "commandDispatches": trace.command_dispatches,
+        "commandWakeColumns": ["id", "firstWakeNanos", "lastWakeNanos", "wakeCount", "resumedNanos"],
+        "droppedCommandWakes": trace.dropped_command_wakes,
+        "commandWakes": trace.command_wakes,
         "readerEnqueueColumns": ["id", "readNanos", "sendReturnedNanos", "sent"],
         "readerTracePoisoned": reader_poisoned,
         "droppedReaderEnqueues": dropped_reader_enqueues,
@@ -544,6 +572,8 @@ mod tests {
                 dropped_yields: 0,
                 command_dispatches: Vec::new(),
                 dropped_command_dispatches: 0,
+                command_wakes: Vec::new(),
+                dropped_command_wakes: 0,
                 reader: ReaderTrace::new(),
             });
         });

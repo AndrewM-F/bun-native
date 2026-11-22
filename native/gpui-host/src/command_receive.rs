@@ -1,19 +1,85 @@
 //! Distinguish an immediately ready command from an actual receiver suspension.
 
 use std::future::{Future, poll_fn};
-use std::task::Poll;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
+use std::time::Instant;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WakeObservation {
+    pub(crate) first: Instant,
+    pub(crate) last: Instant,
+    pub(crate) count: u64,
+    pub(crate) resumed: Instant,
+}
+
+#[derive(Default)]
+struct Wakes {
+    first: Option<Instant>,
+    last: Option<Instant>,
+    count: u64,
+}
+
+struct RecordingWake {
+    inner: Waker,
+    events: Arc<Mutex<Wakes>>,
+}
+
+impl Wake for RecordingWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let at = Instant::now();
+        {
+            let mut events = self
+                .events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            events.first.get_or_insert(at);
+            events.last = Some(at);
+            events.count = events.count.saturating_add(1);
+        }
+        self.inner.wake_by_ref();
+    }
+}
 
 pub(crate) async fn receive<T>(
     receiver: &async_channel::Receiver<T>,
-) -> Result<(T, bool), async_channel::RecvError> {
+) -> Result<(T, bool, Option<WakeObservation>), async_channel::RecvError> {
     let mut suspended = false;
     let mut receive = std::pin::pin!(receiver.recv());
-    poll_fn(|cx| match receive.as_mut().poll(cx) {
-        Poll::Pending => {
-            suspended = true;
-            Poll::Pending
+    let events = crate::phases::enabled().then(|| Arc::new(Mutex::new(Wakes::default())));
+    poll_fn(|cx| {
+        let resumed = events.as_ref().map(|_| Instant::now());
+        let result = if let Some(events) = &events {
+            let waker = Waker::from(Arc::new(RecordingWake {
+                inner: cx.waker().clone(),
+                events: events.clone(),
+            }));
+            receive.as_mut().poll(&mut Context::from_waker(&waker))
+        } else {
+            receive.as_mut().poll(cx)
+        };
+        match result {
+            Poll::Pending => {
+                suspended = true;
+                Poll::Pending
+            }
+            Poll::Ready(result) => {
+                let observation = events.as_ref().and_then(|events| {
+                    let events = events.lock().unwrap_or_else(|error| error.into_inner());
+                    Some(WakeObservation {
+                        first: events.first?,
+                        last: events.last?,
+                        count: events.count,
+                        resumed: resumed?,
+                    })
+                });
+                Poll::Ready(result.map(|value| (value, suspended, observation)))
+            }
         }
-        Poll::Ready(result) => Poll::Ready(result.map(|value| (value, suspended))),
     })
     .await
 }
@@ -21,7 +87,6 @@ pub(crate) async fn receive<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::task::{Context, Waker};
 
     #[test]
     fn distinguishes_ready_and_suspended_receives() {
@@ -29,7 +94,7 @@ mod tests {
         sender.try_send(1).unwrap();
         assert_eq!(
             futures_lite::future::block_on(receive(&receiver)),
-            Ok((1, false))
+            Ok((1, false, None))
         );
 
         let mut future = std::pin::pin!(receive(&receiver));
@@ -38,8 +103,34 @@ mod tests {
         sender.try_send(2).unwrap();
         assert_eq!(
             future.as_mut().poll(&mut context),
-            Poll::Ready(Ok((2, true)))
+            Poll::Ready(Ok((2, true, None)))
         );
+    }
+
+    #[test]
+    fn diagnostic_waker_records_and_forwards_each_wake() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counter(AtomicUsize);
+        impl Wake for Counter {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let counter = Arc::new(Counter(AtomicUsize::new(0)));
+        let events = Arc::new(Mutex::new(Wakes::default()));
+        let waker = Waker::from(Arc::new(RecordingWake {
+            inner: Waker::from(counter.clone()),
+            events: events.clone(),
+        }));
+        waker.wake_by_ref();
+        waker.wake();
+        let recorded = events.lock().unwrap();
+        assert_eq!(recorded.count, 2);
+        assert!(recorded.first.unwrap() <= recorded.last.unwrap());
+        assert_eq!(counter.0.load(Ordering::SeqCst), 2);
     }
 
     #[test]
