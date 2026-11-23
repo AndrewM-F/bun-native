@@ -26,6 +26,11 @@ on:
       WINDOWS_CODESIGN_PFX_PASSWORD:
         required: false
   workflow_dispatch:
+    inputs:
+      filetime-repro:
+        description: Run the fixed-count Windows filesystem timestamp diagnostic only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,9 +40,60 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  windows-filetime-repro:
+    name: Windows filesystem timestamp reproduction
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.filetime-repro && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_INCREMENTAL: 0
+      BUN_NATIVE_HOST_PROFILE: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          release-target: 'true'
+          remap-cargo-home: 'true'
+      - name: Find the Windows SDK shader compiler
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem -Directory $sdk | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (!$fxc) { throw 'Windows SDK shader compiler is unavailable' }
+          "GPUI_FXC_PATH=$fxc" >> $env:GITHUB_ENV
+      - name: Build the release host and inspected AOT fixture
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'filetime-repro'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          cargo build --locked --release -p bun-native-host 2>&1 | Tee-Object -FilePath (Join-Path $root 'build.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Native host build failed' }
+          $hostPath = (Resolve-Path 'target/release/bun-native-host.exe').Path
+          "BUN_NATIVE_HOST=$hostPath" >> $env:GITHUB_ENV
+          bun test tests/quality/windows-filetime-evidence.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'FILETIME evidence control failed' }
+          bun scripts/quality/compile-aot-entries.ts --entry filesystem-grants --outdir (Join-Path $root 'package')
+          if ($LASTEXITCODE -ne 0) { throw 'Filesystem grants AOT build failed' }
+      - name: Run all predeclared filesystem trials
+        run: |
+          ./scripts/quality/windows-filetime-repro.ps1 -Output (Join-Path $env:RUNNER_TEMP 'filetime-repro') -Pairs 20
+      - name: Retain every trial and failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-filetime-repro
+          path: |
+            ${{ runner.temp }}/filetime-repro/
+            !${{ runner.temp }}/filetime-repro/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
   native:
     name: GPUI release and native paint (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || !inputs.filetime-repro)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     # Each OS was one serial ~9 min job. Every shard builds the same release
