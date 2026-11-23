@@ -18,7 +18,8 @@ if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch 'clang version 23\.1
 $records = [Collections.Generic.List[object]]::new()
 foreach ($linkage in @('weak', 'strong')) {
   foreach ($lto in @('off', 'on')) {
-    $directory = Join-Path $root "$linkage-$lto"
+   foreach ($definitionLto in @('off', 'on')) {
+    $directory = Join-Path $root "$linkage-$lto-definition-$definitionLto"
     New-Item -ItemType Directory -Path $directory | Out-Null
     $attribute = if ($linkage -eq 'weak') { '__attribute__((weak)) ' } else { '' }
     $declaration = "extern `"C`" ${attribute}void WTFTimer__update(int);"
@@ -32,24 +33,26 @@ foreach ($linkage in @('weak', 'strong')) {
     foreach ($name in @('a', 'b', 'definition')) {
       $object = Join-Path $directory "$name.obj"
       $arguments = @('/nologo', '/c', '/O2', '/GS-', '/Zl', "/Fo$object")
-      if ($lto -eq 'on') { $arguments += '/clang:-flto=thin' }
+      if (($name -ne 'definition' -and $lto -eq 'on') -or ($name -eq 'definition' -and $definitionLto -eq 'on')) { $arguments += '/clang:-flto=thin' }
       $arguments += Join-Path $directory "$name.cpp"
       & $clang @arguments *> (Join-Path $directory "$name-compile.log")
       if ($LASTEXITCODE -ne 0) { throw "Compiler failed for $linkage/$lto/$name" }
       $objects += $object
     }
     $dll = Join-Path $directory 'control.dll'
-    & $linker /dll /noentry /nodefaultlib /opt:noref "/out:$dll" @objects *> (Join-Path $directory 'link.log')
+    & $linker /dll /noentry /nodefaultlib /opt:noref /LTCG /opt:lldlto=2 /opt:lldltocgo=2 "/out:$dll" @objects *> (Join-Path $directory 'link.log')
     $linkExit = $LASTEXITCODE
     $records.Add([pscustomobject]@{
       linkage = $linkage
       thinLto = ($lto -eq 'on')
+      definitionThinLto = ($definitionLto -eq 'on')
       linkExit = $linkExit
       sourceSha256 = (Get-FileHash -Algorithm SHA256 (Join-Path $directory 'a.cpp')).Hash
     })
     ConvertTo-Json -InputObject ($records.ToArray()) -Depth 5 | Set-Content -Encoding utf8 (Join-Path $root 'results.json')
-    Write-Output "$linkage/$lto link exit $linkExit"
+    Write-Output "$linkage/$lto/definition-$definitionLto link exit $linkExit"
     if ($linkage -eq 'strong' -and $linkExit -ne 0) { throw 'Strong-import positive control failed' }
+  }
   }
 }
 $version | Set-Content -Encoding utf8 (Join-Path $root 'llvm-version.txt')
