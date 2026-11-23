@@ -21,6 +21,7 @@ on:
             'runtime-preflight',
             'runtime-build',
             'runtime-compare',
+            'runtime-link-control',
           ]
         default: 'none'
       runtime-build-run:
@@ -70,6 +71,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  windows-runtime-link-control:
+    name: Windows weak timer symbol link control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-link-control' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install verified LLVM 23.1.1
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'llvm-23.1.1.msi'
+          Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-win64.msi' -OutFile $installer
+          if ((Get-FileHash -Algorithm SHA256 $installer).Hash -ne '11af43ba261a1158090dd6f0da40d7a34f32dbfb4a76b43240bffa1ebb140984') { throw 'LLVM installer digest mismatch' }
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', $installer, '/qn', '/norestart') -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "LLVM installer failed: $($install.ExitCode)" }
+      - name: Compare weak and strong imports with and without ThinLTO
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'runtime-link-control'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          ./benchmarks/retention/windows-weak-link.ps1 -Output $root -LlvmBin 'C:\Program Files\LLVM\bin'
+      - name: Retain every compiler and linker outcome
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-runtime-link-control
+          path: ${{ runner.temp }}/runtime-link-control/
+          if-no-files-found: warn
+          retention-days: 30
+
   windows-runtime-compare:
     name: Compare source-built and distributed Windows runtimes
     if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
