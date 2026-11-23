@@ -20,3 +20,25 @@ export function visiblePairsPlan(pairs: number): Trial[] {
   }
   return trials
 }
+
+/** Split paired differences by actual first launch; results remain descriptive. */
+export function visibleDifferencesByOrder(trials: Trial[], differences: number[]) {
+  const comparisons = trials.filter((trial) => trial.phase === 'comparison')
+  if (comparisons.length !== differences.length * 2) throw new Error('Incomplete comparison pairs')
+  const result: Record<Variant, number[]> = { reference: [], native: [] }
+  differences.forEach((difference, pair) => {
+    const first = comparisons[pair * 2]
+    const second = comparisons[pair * 2 + 1]
+    if (
+      !first ||
+      !second ||
+      first.pair !== pair ||
+      second.pair !== pair ||
+      first.variant === second.variant ||
+      !Number.isFinite(difference)
+    )
+      throw new Error('Invalid comparison pair')
+    result[first.variant].push(difference)
+  })
+  return result
+}

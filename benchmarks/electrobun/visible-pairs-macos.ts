@@ -4,7 +4,12 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
 import { describe, bootstrapMedian } from '../comparison/stats.ts'
-import { visiblePairsPlan, type Trial, type Variant } from './visible-pairs-plan.ts'
+import {
+  visibleDifferencesByOrder,
+  visiblePairsPlan,
+  type Trial,
+  type Variant,
+} from './visible-pairs-plan.ts'
 
 const { values } = parseArgs({
   options: {
@@ -134,6 +139,16 @@ if (!failure) {
         elapsed(items.find((item) => item.trial.variant === 'reference')!)
       )
     })
+    const byOrder = visibleDifferencesByOrder(plan, differences)
+    summaries[`${metric}-nativeMinusReferenceByFirstLaunch`] = Object.fromEntries(
+      (['reference', 'native'] as const).map((variant) => [
+        variant,
+        {
+          raw: byOrder[variant],
+          distribution: describe(byOrder[variant]),
+        },
+      ])
+    )
     summaries[`${metric}-nativeMinusReferenceMs`] = {
       raw: differences,
       distribution: describe(differences),
@@ -152,7 +167,7 @@ writeFileSync(
       viewport,
       summaries,
       scope:
-        'Hosted VM; both intervals include observer overhead and are not physical presentation. Capture completion precedes independent verification; the capture instant is unknown. A/A controls are descriptive, not a precision guarantee. No product ranking follows from this fixture.',
+        'Hosted VM; both intervals include observer overhead and are not physical presentation. Capture completion precedes independent verification; the capture instant is unknown. A/A controls and order splits are descriptive, not a precision guarantee. No product ranking follows from this fixture.',
     },
     null,
     2

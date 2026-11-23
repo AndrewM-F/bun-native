@@ -1,5 +1,8 @@
 import { expect, test } from 'bun:test'
-import { visiblePairsPlan } from '../../benchmarks/electrobun/visible-pairs-plan.ts'
+import {
+  visibleDifferencesByOrder,
+  visiblePairsPlan,
+} from '../../benchmarks/electrobun/visible-pairs-plan.ts'
 
 test('visible pair plan has balanced controls and alternating fresh-process comparisons', () => {
   const plan = visiblePairsPlan(4)
@@ -24,4 +27,14 @@ test('visible pair plan has balanced controls and alternating fresh-process comp
     'reference',
   ])
   for (const count of [0, 2, 21, 3.5, NaN]) expect(() => visiblePairsPlan(count)).toThrow()
+})
+
+test('paired differences retain the actual first-launch order', () => {
+  const plan = visiblePairsPlan(5)
+  expect(visibleDifferencesByOrder(plan, [-17, 8, 15, 9, -21])).toEqual({
+    reference: [-17, 15, -21],
+    native: [8, 9],
+  })
+  expect(() => visibleDifferencesByOrder(plan, [1])).toThrow()
+  expect(() => visibleDifferencesByOrder(plan, [1, 2, 3, 4, NaN])).toThrow()
 })
