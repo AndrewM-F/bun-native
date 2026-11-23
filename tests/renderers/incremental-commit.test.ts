@@ -324,6 +324,20 @@ for (const width of [255, 256, 257, 500]) {
     assertOrder()
     expect(model.ops).toEqual({ ...rotationStart, insert: rotationStart.insert + 1 })
 
+    // The same first child with a changed middle is not a simple rotation.
+    const rotation = [...container.children]
+    insertNode(container, rotation[width - 1]!, rotation[0]!)
+    insertNode(container, rotation[width - 3]!, rotation[2]!)
+    await root.flush()
+    assertOrder()
+
+    // The reverse rotation remains a one-move operation on the general path.
+    const reverseStart = { ...model.ops }
+    insertNode(container, container.children[0]!)
+    await root.flush()
+    assertOrder()
+    expect(model.ops).toEqual({ ...reverseStart, insert: reverseStart.insert + 1 })
+
     const ends = [...container.children]
     const endsStart = { ...model.ops }
     insertNode(container, ends[width - 1]!, ends[0]!)
