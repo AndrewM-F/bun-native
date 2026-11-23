@@ -45,6 +45,10 @@ OS input or display presentation. The Linux paired workflow runs development
 and inspected AOT clients against the same release host, with fresh-process
 A/A controls and alternating baseline/candidate pairs. Each process provides
 one median per case; individual updates are not independent trials.
+The same workflow compares the in-process renderer fixture on Linux, macOS,
+and Windows in development mode, plus inspected AOT clients on Linux and macOS.
+Windows AOT is excluded because the pinned source-built Windows toolchain does
+not yet establish the same JIT-removed configuration.
 
 ## Recorded comparison
 

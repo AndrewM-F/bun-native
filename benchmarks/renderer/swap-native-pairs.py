@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import random
 import statistics
 import sys
@@ -85,6 +86,10 @@ def main():
     report = {
         "status": "running",
         "scope": "Real native windows; mixed swaps and rotations from staging to acknowledged native command, not physical input or display presentation. Each fresh process is an independent trial.",
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "cpu_count": os.cpu_count(),
+        "runner_image": os.environ.get("ImageVersion"),
         "base_commit": args.base_commit,
         "candidate_commit": args.candidate_commit,
         "sha256": frozen,
