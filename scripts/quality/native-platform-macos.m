@@ -256,6 +256,22 @@ static void require_pointer_target(NSDictionary *state, CGPoint point) {
     verify_pointer_target(state, windows, point, hitWindow);
 }
 
+// Do not expose arbitrary process paths or other window metadata. These fixed
+// labels are diagnostic only and never affect whether an overlap is rejected.
+static NSString *system_window_owner(NSNumber *pid) {
+    char path[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    if (proc_pidpath(pid.intValue, path, sizeof(path)) <= 0) return @"unknown";
+    if (strcmp(path, "/System/Library/CoreServices/WindowManager.app/Contents/MacOS/WindowManager") == 0)
+        return @"WindowManager";
+    if (strcmp(path, "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter") == 0)
+        return @"ControlCenter";
+    if (strcmp(path, "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock") == 0)
+        return @"Dock";
+    if (strcmp(path, "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer") == 0)
+        return @"WindowServer";
+    return @"unknown";
+}
+
 static NSString *visible_region_rejection(NSDictionary *state, NSDictionary *candidate,
     CGRect bounds, CGRect region) {
     // Retain only numeric geometry and identity, never another window's title.
@@ -263,6 +279,7 @@ static NSString *visible_region_rejection(NSDictionary *state, NSDictionary *can
         @"expectedPID": state[@"host"][@"pid"],
         @"overlapWindow": candidate[(__bridge NSString *)kCGWindowNumber],
         @"overlapPID": candidate[(__bridge NSString *)kCGWindowOwnerPID],
+        @"systemOwner": system_window_owner(candidate[(__bridge NSString *)kCGWindowOwnerPID]),
         @"layer": candidate[(__bridge NSString *)kCGWindowLayer],
         @"alpha": candidate[(__bridge NSString *)kCGWindowAlpha],
         @"frame": @[@(bounds.origin.x), @(bounds.origin.y), @(bounds.size.width), @(bounds.size.height)],
