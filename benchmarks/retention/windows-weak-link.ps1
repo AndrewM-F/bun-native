@@ -69,3 +69,6 @@ foreach ($linkage in @('weak', 'strong')) {
   }
 }
 $version | Set-Content -Encoding utf8 (Join-Path $root 'llvm-version.txt')
+# The last strong/no-definition link must fail; its expected exit must not fail
+# the enclosing workflow after every result and control has been checked.
+$global:LASTEXITCODE = 0
