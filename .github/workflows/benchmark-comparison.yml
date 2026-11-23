@@ -116,9 +116,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows native tool provisioning failed' }
           rustup toolchain install nightly-2026-09-15 --profile minimal --component rust-src --component llvm-tools
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain install failed' }
-      - name: Build unmodified Bun and WebKit with release LTO
-        working-directory: bun-source
+      - name: Preserve generator inputs while shortening Windows command lines
         run: |
+          python benchmarks/retention/shorten-upstream-build.py (Join-Path $env:GITHUB_WORKSPACE 'bun-source') (Join-Path $env:RUNNER_TEMP 'runtime-build-adjustments.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Build adjustment failed' }
+      - name: Build source runtime with adjusted codegen paths and release LTO
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE 'bun-source'
+          $webkit = Join-Path $env:GITHUB_WORKSPACE 'webkit-source'
+          if ((Test-Path 'D:\b') -or (Test-Path 'D:\w')) { throw 'Short build paths already exist' }
+          try {
+          Move-Item $source 'D:\b'
+          Move-Item $webkit 'D:\w'
+          Set-Location 'D:\b'
           . ./scripts/vs-shell.ps1
           $paths = @($env:PATH, [Environment]::GetEnvironmentVariable('PATH', 'Machine'), [Environment]::GetEnvironmentVariable('PATH', 'User')) -join ';'
           $cleanPath = ($paths -split ';' | Where-Object { $_ -and $_ -notmatch '(?i)strawberry' }) -join ';'
@@ -127,7 +137,7 @@ jobs:
           } | Select-Object -First 1
           if (-not $llvmDir) { throw 'Verified LLVM 23.1.1 executable not found' }
           $env:PATH = "$llvmDir;C:\Program Files\NASM;$cleanPath;C:\Program Files\Git\usr\bin;C:\cygwin64\bin"
-          $env:BUN_WEBKIT_PATH = Join-Path $env:GITHUB_WORKSPACE 'webkit-source'
+          $env:BUN_WEBKIT_PATH = 'D:\w'
           $env:RUSTUP_TOOLCHAIN = 'nightly-2026-09-15'
           clang --version
           nasm --version
@@ -147,12 +157,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Built runtime revision check failed' }
           $revision = & $runtime -e 'process.stdout.write(Bun.revision)'
           if ($LASTEXITCODE -ne 0 -or $revision -ne 'b1007f1177fd402fae67387b8548cae5ae9b5707') { throw "Unexpected built runtime revision: $revision" }
+          } finally {
+            Set-Location $env:GITHUB_WORKSPACE
+            if (Test-Path 'D:\b') { Move-Item 'D:\b' $source }
+            if (Test-Path 'D:\w') { Move-Item 'D:\w' $webkit }
+          }
       - name: Retain built runtime
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-uninstrumented-source-runtime
-          path: bun-source/build/release-local/bun.exe
+          path: |
+            bun-source/build/release-local/bun.exe
+            ${{ runner.temp }}/runtime-build-adjustments.json
           if-no-files-found: warn
           retention-days: 7
 
