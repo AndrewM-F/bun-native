@@ -469,6 +469,22 @@ jobs:
           }
           if (Get-Command clang -CommandType Application -ErrorAction SilentlyContinue) { clang --version }
           if (Get-Command rustup -CommandType Application -ErrorAction SilentlyContinue) { rustup show }
+          # Inventory the already-installed SDK and MSVC/ATL before considering
+          # a cross-build sysroot; do not download or accept any license here.
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if ($LASTEXITCODE -ne 0 -or !$vs) { throw 'Visual Studio installation not found' }
+          Write-Output "Visual Studio: $vs"
+          Get-ChildItem (Join-Path $vs 'VC/Tools/MSVC') -Directory | ForEach-Object {
+            $atl = Join-Path $_.FullName 'atlmfc/include/atlstr.h'
+            $crt = Join-Path $_.FullName 'include/vcruntime.h'
+            Write-Output "MSVC $($_.Name): ATL=$(Test-Path $atl), CRT=$(Test-Path $crt)"
+          }
+          $kit = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10'
+          Get-ChildItem (Join-Path $kit 'Include') -Directory | ForEach-Object {
+            $kernel = Join-Path $kit "Lib/$($_.Name)/um/x64/kernel32.lib"
+            Write-Output "SDK $($_.Name): kernel32=$(Test-Path $kernel)"
+          }
 
   linux:
     name: Linux core/Solid/React development and AOT comparison
