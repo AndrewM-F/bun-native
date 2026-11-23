@@ -18,6 +18,78 @@ SPEC.loader.exec_module(ADJUST)
 
 
 class UpstreamBuildAdjustmentTests(unittest.TestCase):
+    def test_strong_timer_checks_identity_and_only_changes_one_declaration(self):
+        original = (
+            b'extern "C" __attribute__((weak)) void WTFTimer__update(int);\n'
+            b'extern "C" __attribute__((weak)) void WTFTimer__cancel();\n'
+        )
+        with patch.object(
+            ADJUST, "TIMER_SOURCE_SHA256", hashlib.sha256(original).hexdigest()
+        ):
+            adjusted = ADJUST.make_timer_strong(original)
+            self.assertEqual(
+                adjusted,
+                b'extern "C" void WTFTimer__update(int);\n'
+                b'extern "C" __attribute__((weak)) void WTFTimer__cancel();\n',
+            )
+            with self.assertRaises(ValueError):
+                ADJUST.make_timer_strong(original + b"changed")
+        ambiguous = original + original
+        with (
+            patch.object(
+                ADJUST, "TIMER_SOURCE_SHA256", hashlib.sha256(ambiguous).hexdigest()
+            ),
+            self.assertRaises(ValueError),
+        ):
+            ADJUST.make_timer_strong(ambiguous)
+
+    def test_strong_timer_build_records_the_runtime_source_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "bun-source"
+            webkit = workspace / "webkit-source"
+            temp = workspace / "runner-temp"
+            root.mkdir()
+            temp.mkdir()
+            timer = webkit / "Source/WTF/wtf/bun/RunLoopBun.cpp"
+            timer.parent.mkdir(parents=True)
+            original = b'extern "C" __attribute__((weak)) void WTFTimer__update(int);\n'
+            timer.write_bytes(original)
+            icu = b'Write-Host "not $ICU_VERSION: removing it"\n'
+            (webkit / "build-icu.ps1").write_bytes(icu)
+            manifest = temp / "manifest.json"
+            with (
+                patch.object(ADJUST, "CHANGES", {}),
+                patch.object(ADJUST, "ICU_SHA256", hashlib.sha256(icu).hexdigest()),
+                patch.object(
+                    ADJUST, "TIMER_SOURCE_SHA256", hashlib.sha256(original).hexdigest()
+                ),
+                patch.dict(
+                    ADJUST.os.environ,
+                    {
+                        "GITHUB_ACTIONS": "true",
+                        "GITHUB_WORKSPACE": str(workspace),
+                        "RUNNER_TEMP": str(temp),
+                    },
+                ),
+                patch.object(
+                    ADJUST.sys,
+                    "argv",
+                    ["script", str(root), str(webkit), str(manifest), "--strong-timer"],
+                ),
+            ):
+                ADJUST.main()
+            entry = ADJUST.json.loads(manifest.read_text())[
+                "webkit/Source/WTF/wtf/bun/RunLoopBun.cpp"
+            ]
+            self.assertEqual(
+                entry["originalSha256"], hashlib.sha256(original).hexdigest()
+            )
+            self.assertEqual(
+                entry["adjustedSha256"], hashlib.sha256(timer.read_bytes()).hexdigest()
+            )
+            self.assertIn(b'extern "C" void WTFTimer__update', timer.read_bytes())
+
     def test_forced_timer_is_opt_in_and_checks_upstream_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

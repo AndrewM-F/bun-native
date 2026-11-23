@@ -2,7 +2,8 @@
 
 This runs only in the disposable upstream checkout. The generator expands each
 relative argument back to its original absolute path before sorting or reading.
-It changes build/codegen scripts, not runtime source; qualification is separate.
+The optional strong-timer diagnostic also changes one WebKit declaration and is
+not a production build. Qualification is separate.
 """
 
 import hashlib
@@ -51,6 +52,7 @@ CHANGES = {
     ),
 }
 ICU_SHA256 = "41bd03ef64dd84f6433edca3ede6835ad9aaf416434a2b9132d56666b348f74a"
+TIMER_SOURCE_SHA256 = "9053c4e134bb758077975c58168f003ad51ffc1cf5287f0f627f9e52abb60378"
 TIMER_LINK = {
     "scripts/build/bun.ts": (
         "1e12ec96773620eabda30ac1833509128d814905ee99f8bbf5c66cac4d36a8f9",
@@ -90,6 +92,15 @@ def fix_icu_script(original):
     return original.replace(old, b"not ${ICU_VERSION}: removing it")
 
 
+def make_timer_strong(original):
+    if hashlib.sha256(original).hexdigest() != TIMER_SOURCE_SHA256:
+        raise ValueError("Unexpected upstream WebKit timer source identity")
+    old = b'extern "C" __attribute__((weak)) void WTFTimer__update('
+    if original.count(old) != 1:
+        raise ValueError("Expected exactly one weak timer declaration")
+    return original.replace(old, b'extern "C" void WTFTimer__update(')
+
+
 def main():
     root = Path(sys.argv[1]).resolve(strict=True)
     workspace = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve(strict=True)
@@ -105,35 +116,42 @@ def main():
     if manifest.exists():
         raise ValueError("Refusing to overwrite build adjustment manifest")
     if len(sys.argv) not in (4, 5) or (
-        len(sys.argv) == 5 and sys.argv[4] != "--force-timer"
+        len(sys.argv) == 5 and sys.argv[4] not in ("--force-timer", "--strong-timer")
     ):
         raise ValueError("Unexpected diagnostic build arguments")
-    changes = changes_for(root, force_timer=len(sys.argv) == 5)
+    option = sys.argv[4] if len(sys.argv) == 5 else None
+    changes = changes_for(root, force_timer=option == "--force-timer")
     icu_path = webkit / "build-icu.ps1"
     icu_original = icu_path.read_bytes()
     icu_adjusted = fix_icu_script(icu_original)
-    manifest.write_text(
-        json.dumps(
-            {
-                name: {
-                    "originalSha256": hashlib.sha256(original).hexdigest(),
-                    "adjustedSha256": hashlib.sha256(adjusted).hexdigest(),
-                }
-                for name, (original, adjusted) in changes.items()
-            }
-            | {
-                "webkit/build-icu.ps1": {
-                    "originalSha256": hashlib.sha256(icu_original).hexdigest(),
-                    "adjustedSha256": hashlib.sha256(icu_adjusted).hexdigest(),
-                }
-            },
-            indent=2,
-        )
-        + "\n"
+    timer_path = webkit / "Source/WTF/wtf/bun/RunLoopBun.cpp"
+    timer_original = timer_path.read_bytes() if option == "--strong-timer" else None
+    timer_adjusted = (
+        make_timer_strong(timer_original) if timer_original is not None else None
     )
+    manifest_data = {
+        name: {
+            "originalSha256": hashlib.sha256(original).hexdigest(),
+            "adjustedSha256": hashlib.sha256(adjusted).hexdigest(),
+        }
+        for name, (original, adjusted) in changes.items()
+    } | {
+        "webkit/build-icu.ps1": {
+            "originalSha256": hashlib.sha256(icu_original).hexdigest(),
+            "adjustedSha256": hashlib.sha256(icu_adjusted).hexdigest(),
+        }
+    }
+    if timer_original is not None and timer_adjusted is not None:
+        manifest_data["webkit/Source/WTF/wtf/bun/RunLoopBun.cpp"] = {
+            "originalSha256": hashlib.sha256(timer_original).hexdigest(),
+            "adjustedSha256": hashlib.sha256(timer_adjusted).hexdigest(),
+        }
+    manifest.write_text(json.dumps(manifest_data, indent=2) + "\n")
     for name, (_, adjusted) in changes.items():
         (root / name).write_bytes(adjusted)
     icu_path.write_bytes(icu_adjusted)
+    if timer_original is not None and timer_adjusted is not None:
+        timer_path.write_bytes(timer_adjusted)
 
 
 if __name__ == "__main__":
