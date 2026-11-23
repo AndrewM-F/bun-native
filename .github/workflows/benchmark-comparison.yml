@@ -20,8 +20,12 @@ on:
             'first-observation',
             'runtime-preflight',
             'runtime-build',
+            'runtime-compare',
           ]
         default: 'none'
+      runtime-build-run:
+        description: Successful runtime-build run ID for the paired diagnostic
+        default: ''
       trials:
         description: Measured timed trials per artifact (3 to 30)
         default: '5'
@@ -66,6 +70,62 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  windows-runtime-compare:
+    name: Compare source-built and distributed Windows runtimes
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the source-build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -notmatch '^[0-9]+$') { throw 'runtime-build-run must be a numeric run ID' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headBranch,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.event -ne 'workflow_dispatch' -or $run.headBranch -ne $env:GITHUB_REF_NAME -or $run.workflowName -ne 'Benchmark comparison') { throw 'The source-build run is not a successful dispatch from this branch' }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RUNTIME_BUILD_RUN/jobs" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or @($jobs.jobs | Where-Object { $_.name -eq 'Build pinned Windows runtime from source' -and $_.conclusion -eq 'success' }).Count -ne 1) { throw 'The source-build job did not succeed' }
+          $root = Join-Path $env:RUNNER_TEMP 'runtime-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'source-run.json')
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-uninstrumented-source-runtime --dir (Join-Path $root 'source-artifact')
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime artifact download failed' }
+          $runtime = @(Get-ChildItem (Join-Path $root 'source-artifact') -Filter bun.exe -File -Recurse)
+          $manifest = @(Get-ChildItem (Join-Path $root 'source-artifact') -Filter runtime-build-adjustments.json -File -Recurse)
+          if ($runtime.Count -ne 1 -or $manifest.Count -ne 1) { throw 'Runtime artifact must contain exactly one binary and adjustment manifest' }
+          "SOURCE_RUNTIME=$($runtime[0].FullName)" >> $env:GITHUB_ENV
+      - name: Run alternating headless runtime controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'runtime-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3
+          if ($LASTEXITCODE -ne 0) { throw 'At least one paired runtime control was invalid' }
+      - name: Retain every control and source identity
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-runtime-comparison
+          path: |
+            ${{ runner.temp }}/runtime-comparison/
+            !${{ runner.temp }}/runtime-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
   windows-runtime-build:
     name: Build pinned Windows runtime from source
     if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-build' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)

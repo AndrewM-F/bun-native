@@ -48,4 +48,6 @@ The control driver uses the explicitly selected runtime for bundling, AOT compil
 
 `runtime-pairs.py` prepares alternating same-revision runtime controls, records runtime and peer hashes, and requires the baseline, clear and pinned variants in both execution modes for every pair. A local one-pair A/A smoke test passed its harness and positive controls; this only checks the comparator, not the custom-runtime build or performance.
 
+If a source-build job succeeds, the planned Windows comparison will use three alternating pairs of the pinned distribution and that run's retained binary. It will verify the build run and job, retain the adjustment manifest and all observations, and require the pinned-root control in both modes. Differences will be diagnostic, because toolchain and build-script adjustments may change the runtime; neither agreement nor a passing control by itself qualifies a production replacement or establishes a performance gain.
+
 [The subsequent Windows control](https://github.com/AndrewM-F/bun-native/actions/runs/45134487131) completed with the pinned distribution and valid listener/root positive controls. All three baseline development trials still retained indexes 3 and 5, and all three AOT trials retained listener 299. The control job's success validates the diagnostic observations, not the original retention assertion.
