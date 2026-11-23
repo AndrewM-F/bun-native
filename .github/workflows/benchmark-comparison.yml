@@ -19,6 +19,7 @@ on:
             'shutdown',
             'first-observation',
             'runtime-preflight',
+            'runtime-cross-preflight',
             'runtime-build',
             'runtime-compare',
             'runtime-link-control',
@@ -452,6 +453,30 @@ jobs:
             !${{ runner.temp }}/runtime-rust-symbols/**/*.pdb
           if-no-files-found: warn
           retention-days: 7
+
+  linux-runtime-cross-preflight:
+    name: Linux Windows cross-build preflight
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-preflight'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Inspect existing cross-build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$RUNNER_TEMP"
+          for tool in clang clang-cl lld-link llvm-lib llvm-rc cmake ninja nasm rustup cargo; do
+            if command -v "$tool" >/dev/null; then
+              printf '%s: %s\n' "$tool" "$(command -v "$tool")"
+            else
+              printf '%s: unavailable\n' "$tool"
+            fi
+          done
+          if command -v clang >/dev/null; then clang --version; fi
+          if command -v rustup >/dev/null; then rustup show; fi
+          for root in /opt/winsysroot /opt/xwin; do
+            if [[ -d "$root" ]]; then printf '%s: present\n' "$root"; else printf '%s: absent\n' "$root"; fi
+          done
 
   windows-runtime-preflight:
     name: Windows runtime build preflight
