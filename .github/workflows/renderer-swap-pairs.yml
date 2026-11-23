@@ -7,6 +7,7 @@ on:
     types: [opened, reopened, ready_for_review, synchronize]
     paths:
       - .github/workflows/renderer-swap-pairs.yml
+      - benchmarks/renderer/commit.ts
       - benchmarks/renderer/swap-native.ts
       - benchmarks/renderer/swap-native-pairs.py
       - benchmarks/renderer/swap-renderer-pairs.py
