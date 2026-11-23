@@ -234,7 +234,7 @@ jobs:
           bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
           $pinned = (Get-Command bun -CommandType Application).Source
-          $extra = if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-strong-dev-compare') { @('--development-controls-only') } else { @() }
+          $extra = @(if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-strong-dev-compare') { '--development-controls-only' })
           python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 @extra
           if ($LASTEXITCODE -ne 0) { throw 'At least one paired runtime control was invalid' }
       - name: Retain every control and source identity
