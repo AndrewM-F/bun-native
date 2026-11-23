@@ -207,11 +207,16 @@ jobs:
           key: ${{ steps.toolchain.outputs.target-cache-key }}
       - name: Development actual native paint and lifecycle
         timeout-minutes: 3
+        env:
+          BUN_NATIVE_STARTUP_TRACE: '1'
+          BUN_NATIVE_STARTUP_LOG: '1'
         run: |
           python3 scripts/quality/native-platform-smoke.py `
             --output (Join-Path $env:NATIVE_EVIDENCE 'development') `
             --mode development --host-profile release --require-metal-device -- bun tests/native/platform-smoke.ts
           if ($LASTEXITCODE -ne 0) { throw 'Development native paint/lifecycle was not verified' }
+          python3 scripts/quality/verify-startup-trace.py (Join-Path $env:NATIVE_EVIDENCE 'development/native.jsonl')
+          if ($LASTEXITCODE -ne 0) { throw 'Development startup diagnostics were not verified' }
       - name: Compile and inspect the exact native fixture through Bun AOT
         run: |
           $package = Join-Path $env:NATIVE_EVIDENCE 'aot-package'
@@ -228,12 +233,17 @@ jobs:
           }
       - name: AOT actual native paint and lifecycle
         timeout-minutes: 3
+        env:
+          BUN_NATIVE_STARTUP_TRACE: '1'
+          BUN_NATIVE_STARTUP_LOG: '1'
         run: |
           python3 scripts/quality/native-platform-smoke.py `
             --output (Join-Path $env:NATIVE_EVIDENCE 'aot') `
             --mode aot --host-profile release --require-metal-device -- `
             (Join-Path $env:NATIVE_EVIDENCE 'aot-package/platform-smoke')
           if ($LASTEXITCODE -ne 0) { throw 'AOT native paint/lifecycle was not verified' }
+          python3 scripts/quality/verify-startup-trace.py (Join-Path $env:NATIVE_EVIDENCE 'aot/native.jsonl')
+          if ($LASTEXITCODE -ne 0) { throw 'AOT startup diagnostics were not verified' }
       - name: Generated Solid and React templates through create, check and inspected AOT build
         timeout-minutes: 8
         run: |
