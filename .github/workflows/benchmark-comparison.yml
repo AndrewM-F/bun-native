@@ -92,6 +92,10 @@ jobs:
           repository: oven-sh/WebKit
           ref: 4d45755fed4aeef19e95beb90d3d0c884a2812bd
           path: webkit-source
+          sparse-checkout: |
+            Source
+            Tools
+            icu
           persist-credentials: false
       - name: Provision verified LLVM and native build tools
         run: |

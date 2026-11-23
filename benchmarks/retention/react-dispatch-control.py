@@ -220,6 +220,7 @@ def main():
     trials = int(sys.argv[3])
     kind = sys.argv[4] if len(sys.argv) > 4 else "dispatch"
     runtime = sys.argv[5] if len(sys.argv) > 5 else None
+    compiler = runtime or "bun"
     if kind not in ("dispatch", "shutdown", "cycle", "first-observation", "listener"):
         raise ValueError("Unknown control kind")
     if not 1 <= trials <= 10:
@@ -343,7 +344,7 @@ def main():
             env["CONTROL_ENTRY"] = str(generated.resolve())
             env["CONTROL_OUT"] = str(output / variant)
             bundle = 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"react",entry:process.env.CONTROL_ENTRY,outdir:process.env.CONTROL_OUT,cwd:process.cwd()})'
-            subprocess.run(["bun", "-e", bundle], env=env, check=True, timeout=180)
+            subprocess.run([compiler, "-e", bundle], env=env, check=True, timeout=180)
         finally:
             for path in reversed(created):
                 path.unlink()
@@ -353,7 +354,7 @@ def main():
         with (output / f"{variant}-compile.log").open("wb") as log:
             subprocess.run(
                 [
-                    "bun",
+                    compiler,
                     "--no-install",
                     "compile",
                     "--no-script",
@@ -371,7 +372,10 @@ def main():
         inspect = 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); if (!graph.hasCompiledProgram || runtime.jit !== "unused") throw new Error("Not AOT"); console.log(JSON.stringify({graph,runtime},null,2))'
         with (output / f"{variant}-inspection.json").open("wb") as log:
             subprocess.run(
-                ["bun", "-e", inspect, str(binary)], stdout=log, check=True, timeout=30
+                [compiler, "-e", inspect, str(binary)],
+                stdout=log,
+                check=True,
+                timeout=30,
             )
     results = []
     invalid = 0
