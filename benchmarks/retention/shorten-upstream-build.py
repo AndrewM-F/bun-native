@@ -51,11 +51,23 @@ CHANGES = {
     ),
 }
 ICU_SHA256 = "41bd03ef64dd84f6433edca3ede6835ad9aaf416434a2b9132d56666b348f74a"
+TIMER_LINK = {
+    "scripts/build/bun.ts": (
+        "1e12ec96773620eabda30ac1833509128d814905ee99f8bbf5c66cac4d36a8f9",
+        (
+            (
+                "const ldflags = [...flags.ldflags, ...systemLibs(cfg)];",
+                'const ldflags = [...flags.ldflags, ...(cfg.windows ? ["/INCLUDE:WTFTimer__update"] : []), ...systemLibs(cfg)];',
+            ),
+        ),
+    ),
+}
 
 
-def changes_for(root):
+def changes_for(root, force_timer=False):
     changes = {}
-    for name, (expected, replacements) in CHANGES.items():
+    specifications = CHANGES | TIMER_LINK if force_timer else CHANGES
+    for name, (expected, replacements) in specifications.items():
         path = root / name
         original = path.read_bytes()
         if hashlib.sha256(original).hexdigest() != expected:
@@ -92,7 +104,11 @@ def main():
         raise ValueError("Manifest must be in RUNNER_TEMP")
     if manifest.exists():
         raise ValueError("Refusing to overwrite build adjustment manifest")
-    changes = changes_for(root)
+    if len(sys.argv) not in (4, 5) or (
+        len(sys.argv) == 5 and sys.argv[4] != "--force-timer"
+    ):
+        raise ValueError("Unexpected diagnostic build arguments")
+    changes = changes_for(root, force_timer=len(sys.argv) == 5)
     icu_path = webkit / "build-icu.ps1"
     icu_original = icu_path.read_bytes()
     icu_adjusted = fix_icu_script(icu_original)

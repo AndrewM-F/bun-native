@@ -25,6 +25,7 @@ on:
             'runtime-link-inspect',
             'runtime-rust-symbols',
             'runtime-rust-relink',
+            'runtime-force-build',
           ]
         default: 'none'
       runtime-build-run:
@@ -230,7 +231,7 @@ jobs:
 
   windows-runtime-build:
     name: Build pinned Windows runtime from source
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-build", "runtime-rust-symbols", "runtime-rust-relink"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-build", "runtime-rust-symbols", "runtime-rust-relink", "runtime-force-build"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 240
     permissions:
@@ -282,8 +283,12 @@ jobs:
           rustup toolchain install nightly-2026-09-15 --profile minimal --component rust-src --component llvm-tools
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain install failed' }
       - name: Apply recorded upstream build-script adjustments
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
         run: |
-          python benchmarks/retention/shorten-upstream-build.py (Join-Path $env:GITHUB_WORKSPACE 'bun-source') (Join-Path $env:GITHUB_WORKSPACE 'webkit-source') (Join-Path $env:RUNNER_TEMP 'runtime-build-adjustments.json')
+          $adjustArgs = @((Join-Path $env:GITHUB_WORKSPACE 'bun-source'), (Join-Path $env:GITHUB_WORKSPACE 'webkit-source'), (Join-Path $env:RUNNER_TEMP 'runtime-build-adjustments.json'))
+          if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-force-build') { $adjustArgs += '--force-timer' }
+          python benchmarks/retention/shorten-upstream-build.py @adjustArgs
           if ($LASTEXITCODE -ne 0) { throw 'Build adjustment failed' }
       - name: Build source runtime with adjusted codegen paths and release LTO
         env:
@@ -359,7 +364,7 @@ jobs:
             return
           }
           bun scripts/build.ts --profile=release-local --lto=on --build-dir=build/release-local
-          if ($LASTEXITCODE -ne 0) { throw 'Unmodified source runtime build failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Source runtime build failed' }
           $runtime = Resolve-Path build/release-local/bun.exe
           Get-FileHash -Algorithm SHA256 $runtime
           & $runtime --revision
@@ -391,11 +396,17 @@ jobs:
               Get-FileHash -Algorithm SHA256 -LiteralPath $inputPath | Format-List | Out-File -Append (Join-Path $evidence 'hashes.txt')
             }
           }
+          $archives = @(Get-ChildItem (Join-Path $root 'rust-target') -File -Recurse -Filter 'libbun_runtime-*.rlib' -ErrorAction SilentlyContinue)
+          if ($archives.Count -eq 1) {
+            Get-FileHash -Algorithm SHA256 $archives[0].FullName | Format-List | Out-File (Join-Path $evidence 'runtime-archive-hash.txt')
+            $llvmNm = @('C:\LLVM23\bin\llvm-nm.exe', 'C:\Program Files\LLVM\bin\llvm-nm.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            if ($llvmNm) { & $llvmNm --format=posix --defined-only $archives[0].FullName *> (Join-Path $evidence 'runtime-archive-symbols.txt') }
+          }
       - name: Retain built runtime
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ contains(fromJSON('["runtime-rust-symbols", "runtime-rust-relink"]'), inputs.retention-diagnostic) && 'windows-source-rust-symbols' || 'windows-uninstrumented-source-runtime' }}
+          name: ${{ inputs.retention-diagnostic == 'runtime-force-build' && 'windows-forced-timer-source-runtime' || (contains(fromJSON('["runtime-rust-symbols", "runtime-rust-relink"]'), inputs.retention-diagnostic) && 'windows-source-rust-symbols' || 'windows-uninstrumented-source-runtime') }}
           path: |
             bun-source/build/release-local/bun.exe
             ${{ runner.temp }}/runtime-build-adjustments.json
