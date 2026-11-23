@@ -22,7 +22,7 @@ $records = [Collections.Generic.List[object]]::new()
 foreach ($linkage in @('weak', 'strong')) {
   foreach ($lto in @('off', 'on')) {
    foreach ($definitionLto in @('off', 'on')) {
-    foreach ($placement in @('object', 'archive', 'none', 'rust-archive', 'rust-forced')) {
+    foreach ($placement in @('object', 'archive', 'none', 'rust-archive', 'rust-forced', 'rust-private', 'rust-private-forced')) {
     $directory = Join-Path $root "$linkage-$lto-definition-$definitionLto-$placement"
     New-Item -ItemType Directory -Path $directory | Out-Null
     $attribute = if ($linkage -eq 'weak') { '__attribute__((weak)) ' } else { '' }
@@ -50,18 +50,22 @@ foreach ($linkage in @('weak', 'strong')) {
       $objects = @($objects[0], $objects[1], $archive)
     } elseif ($placement -eq 'none') {
       $objects = @($objects[0], $objects[1])
-    } elseif ($placement -in @('rust-archive', 'rust-forced')) {
+    } elseif ($placement -in @('rust-archive', 'rust-forced', 'rust-private', 'rust-private-forced')) {
       $rustSource = Join-Path $directory 'timer.rs'
-      [IO.File]::WriteAllText($rustSource, '#![no_std]' + "`n" + '#[no_mangle] pub extern "C" fn WTFTimer__update(_x: i32) {}' + "`n")
+      $visibility = if ($placement -in @('rust-private', 'rust-private-forced')) { '' } else { 'pub ' }
+      [IO.File]::WriteAllText($rustSource, '#![no_std]' + "`n" + "#[no_mangle] ${visibility}extern `"C`" fn WTFTimer__update(_x: i32) {}`n")
       $rustArgs = @('--crate-name', 'timer', '--crate-type', 'rlib', '-C', 'opt-level=2', '--out-dir', $directory, $rustSource)
       if ($definitionLto -eq 'on') { $rustArgs += @('-C', 'linker-plugin-lto') }
       & rustc @rustArgs *> (Join-Path $directory 'rust-compile.log')
       if ($LASTEXITCODE -ne 0) { throw 'Rust archive control failed to compile' }
-      $objects = @($objects[0], $objects[1], (Join-Path $directory 'libtimer.rlib'))
+      $archive = Join-Path $directory 'libtimer.rlib'
+      & (Join-Path $LlvmBin 'llvm-nm.exe') --format=posix --defined-only $archive *> (Join-Path $directory 'rust-symbols.log')
+      if ($LASTEXITCODE -ne 0) { throw 'Rust archive symbol inspection failed' }
+      $objects = @($objects[0], $objects[1], $archive)
     }
     $dll = Join-Path $directory 'control.dll'
     $linkArgs = @('/dll', '/noentry', '/nodefaultlib', '/opt:noref', '/LTCG', '/opt:lldlto=2', '/opt:lldltocgo=2', "/out:$dll")
-    if ($placement -eq 'rust-forced') { $linkArgs += '/include:WTFTimer__update' }
+    if ($placement -in @('rust-forced', 'rust-private-forced')) { $linkArgs += '/include:WTFTimer__update' }
     & $linker @linkArgs @objects *> (Join-Path $directory 'link.log')
     $linkExit = $LASTEXITCODE
     $records.Add([pscustomobject]@{
