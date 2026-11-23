@@ -722,3 +722,6 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some("TextInput")),
     ]);
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod xim_compound_text_tests;
