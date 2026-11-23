@@ -223,7 +223,7 @@ jobs:
           Move-Item $source 'D:\b'
           Move-Item $webkit 'D:\w'
           Set-Location 'D:\b'
-          . ./scripts/vs-shell.ps1
+          . (Join-Path (Join-Path (Get-Location).Path 'scripts') 'vs-shell.ps1')
           $paths = @($env:PATH, [Environment]::GetEnvironmentVariable('PATH', 'Machine'), [Environment]::GetEnvironmentVariable('PATH', 'User')) -join ';'
           $cleanPath = ($paths -split ';' | Where-Object { $_ -and $_ -notmatch '(?i)strawberry' }) -join ';'
           $llvmDir = @('C:\LLVM23\bin', 'C:\Program Files\LLVM\bin') | Where-Object {
