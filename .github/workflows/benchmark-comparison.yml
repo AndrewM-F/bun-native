@@ -80,7 +80,7 @@ concurrency:
 jobs:
   windows-runtime-link-inspect:
     name: Inspect retained Windows runtime linker inputs
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-link-inspect'
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-link-inspect' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 15
     permissions:
