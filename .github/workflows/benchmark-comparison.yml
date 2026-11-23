@@ -19,7 +19,7 @@ on:
         default: false
       streaming-trials:
         description: Streaming-list soaks per framework and mode (1 to 10)
-        default: '3'
+        default: '5'
       visible-pairs:
         description: Hosted visible fixture (off, 0 for smoke, or 3 to 20 pairs)
         type: string
