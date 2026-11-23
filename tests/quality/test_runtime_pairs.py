@@ -19,7 +19,10 @@ class RuntimePairsTests(unittest.TestCase):
             {
                 "variant": variant,
                 "valid": True,
-                "records": [{"mode": "development"}, {"mode": "aot"}],
+                "records": [
+                    {"mode": "development", "valid": True},
+                    {"mode": "aot", "valid": True},
+                ],
             }
             for variant in ("baseline", "clear", "pin")
         ]
@@ -27,7 +30,13 @@ class RuntimePairsTests(unittest.TestCase):
         records[2]["valid"] = False
         self.assertFalse(PAIRS.observations_valid(records))
         records[2]["valid"] = True
-        records[1]["records"] = [{"mode": "development"}, {"mode": "development"}]
+        records[2]["records"][0]["valid"] = False
+        self.assertFalse(PAIRS.observations_valid(records))
+        records[2]["records"][0]["valid"] = True
+        records[1]["records"] = [
+            {"mode": "development", "valid": True},
+            {"mode": "development", "valid": True},
+        ]
         self.assertFalse(PAIRS.observations_valid(records))
         self.assertFalse(PAIRS.observations_valid([None, None, None]))
 

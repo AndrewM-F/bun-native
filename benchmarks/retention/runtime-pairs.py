@@ -39,6 +39,7 @@ def observations_valid(records):
             and isinstance(item.get("records"), list)
             and len(item["records"]) == 2
             and all(isinstance(record, dict) for record in item["records"])
+            and all(record.get("valid") is True for record in item["records"])
             and {record.get("mode") for record in item["records"]}
             == {"development", "aot"}
             for item in records
