@@ -19,7 +19,7 @@ export interface FileGrantOptions {
 export interface NativeFileStat {
   readonly kind: FileKind
   readonly size: number
-  /** Milliseconds since the Unix epoch. */
+  /** Whole milliseconds since the Unix epoch, rounded toward negative infinity. */
   readonly modifiedMs: number
 }
 

@@ -107,7 +107,9 @@ jobs:
           $hostPath = (Resolve-Path 'target/release/bun-native-host.exe').Path
           $env:BUN_NATIVE_HOST = $hostPath
           "BUN_NATIVE_HOST=$hostPath" >> $env:GITHUB_ENV
-          bun test tests/quality/windows-filetime-evidence.test.ts
+          cargo test --locked --release -p bun-native-host modified_time_floors_submillisecond_filetime_ticks -- --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $root 'timestamp-unit.log')
+          if ($LASTEXITCODE -ne 0 -or !(Select-String -Quiet -Path (Join-Path $root 'timestamp-unit.log') -Pattern '1 passed; 0 failed')) { throw 'Native FILETIME conversion unit test failed or did not run' }
+          bun test tests/quality/windows-filetime-evidence.test.ts tests/quality/mtime-precision.test.ts
           if ($LASTEXITCODE -ne 0) { throw 'FILETIME evidence control failed' }
           bun scripts/quality/compile-aot-entries.ts --entry filesystem-grants --outdir (Join-Path $root 'package')
           if ($LASTEXITCODE -ne 0) { throw 'Filesystem grants AOT build failed' }

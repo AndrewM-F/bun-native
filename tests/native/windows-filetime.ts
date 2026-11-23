@@ -25,6 +25,11 @@ public static class FiletimeEvidence {
 '@
 [Console]::Out.Write([FiletimeEvidence]::LastWrite($env:BUN_NATIVE_MTIME_EVIDENCE_PATH).ToString([Globalization.CultureInfo]::InvariantCulture))
 `
+const writeFiletime = String.raw`
+$ErrorActionPreference = 'Stop'
+$ticks = [long]::Parse($env:BUN_NATIVE_MTIME_TICKS, [Globalization.CultureInfo]::InvariantCulture)
+[IO.File]::SetLastWriteTimeUtc($env:BUN_NATIVE_MTIME_EVIDENCE_PATH, [DateTime]::FromFileTimeUtc($ticks))
+`
 
 export function parseFiletimeEvidence(text: string): string | null {
   const value = text.trim()
@@ -59,5 +64,33 @@ export function windowsFiletimeEvidence(
     return parseFiletimeEvidence(Buffer.from(result.stdout).toString())
   } catch {
     return null
+  }
+}
+
+/** Set an exact timestamp on a private test file for the Windows boundary control. */
+export function setWindowsFiletime(
+  path: string,
+  ticks: string,
+  platform = process.platform,
+  run?: FiletimeRunner
+): boolean {
+  const parsed = parseFiletimeEvidence(ticks)
+  if (platform !== 'win32' || parsed === null || BigInt(parsed) > 2_650_467_743_999_999_999n)
+    return false
+  try {
+    const powershell = `${process.env['SystemRoot']}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+    const command = Buffer.from(writeFiletime, 'utf16le').toString('base64')
+    const argv = [powershell, '-NoProfile', '-NonInteractive', '-EncodedCommand', command]
+    const env = {
+      ...process.env,
+      BUN_NATIVE_MTIME_EVIDENCE_PATH: path,
+      BUN_NATIVE_MTIME_TICKS: parsed,
+    }
+    const result = run
+      ? run(argv, env)
+      : Bun.spawnSync(argv, { env, stdout: 'pipe', stderr: 'ignore', timeout: 15_000 })
+    return result.success
+  } catch {
+    return false
   }
 }

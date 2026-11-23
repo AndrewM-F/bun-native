@@ -27,7 +27,8 @@ import {
 } from 'node:fs'
 import { release, tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { windowsFiletimeEvidence } from './windows-filetime.ts'
+import { setWindowsFiletime, windowsFiletimeEvidence } from './windows-filetime.ts'
+import { wholeUnixMilliseconds } from './mtime-precision.ts'
 
 const output = process.env['BUN_NATIVE_FILESYSTEM_EVIDENCE']
 const executable = process.env['BUN_NATIVE_HOST']
@@ -147,14 +148,17 @@ async function readWrite(grant: NativeFileGrant) {
   const stat = await grant.stat('notes.txt')
   assert.equal(stat.kind, 'file')
   assert.equal(stat.size, 3)
-  // The comparison is unchanged. When it fails, name both values and the
-  // surrounding clock facts instead of reporting only "false !== true": #681
-  // needs the native wire value, the Bun value and the raw file timestamps to
-  // tell a conversion defect from a rounding or filesystem-granularity effect.
+  // Compare the native whole-millisecond contract with the integer nanosecond
+  // stat, avoiding rounding of Bun's floating mtimeMs at a millisecond boundary.
   const bunStat = statSync(join(work, 'notes.txt'))
+  const bunStatNs = statSync(join(work, 'notes.txt'), { bigint: true }).mtimeNs
+  const expectedModifiedMs = wholeUnixMilliseconds(bunStatNs)
+  const mismatch = BigInt(stat.modifiedMs) !== expectedModifiedMs
   const modification = {
     nativeModifiedMs: stat.modifiedMs,
     bunMtimeMs: bunStat.mtimeMs,
+    bunMtimeNs: bunStatNs.toString(),
+    expectedModifiedMs: expectedModifiedMs.toString(),
     deltaMs: stat.modifiedMs - bunStat.mtimeMs,
     bunCtimeMs: bunStat.ctimeMs,
     bunBirthtimeMs: bunStat.birthtimeMs,
@@ -163,15 +167,34 @@ async function readWrite(grant: NativeFileGrant) {
     operation: 'write truncate',
     mode,
     rawWindowsFiletimeTicks:
-      windows && Math.abs(stat.modifiedMs - bunStat.mtimeMs) >= 1
-        ? windowsFiletimeEvidence(join(work, 'notes.txt'))
-        : null,
+      windows && mismatch ? windowsFiletimeEvidence(join(work, 'notes.txt')) : null,
   }
   assert.equal(
-    Math.abs(modification.deltaMs) < 1,
-    true,
+    BigInt(stat.modifiedMs),
+    expectedModifiedMs,
     `native and Bun disagree on mtime: ${JSON.stringify(modification)}`
   )
+  if (windows && process.env['BUN_NATIVE_MTIME_BOUNDARY'] === '1') {
+    const file = join(work, 'notes.txt')
+    const boundaryTicks = '133444736000009999'
+    const expected = 1_700_000_000_000n
+    assert.equal(setWindowsFiletime(file, boundaryTicks), true, 'Could not set boundary FILETIME')
+    assert.equal(
+      windowsFiletimeEvidence(file),
+      boundaryTicks,
+      'Boundary FILETIME was not preserved'
+    )
+    const actual = await grant.stat('notes.txt')
+    const precise = statSync(file, { bigint: true }).mtimeNs
+    assert.equal(BigInt(actual.modifiedMs), expected)
+    assert.equal(wholeUnixMilliseconds(precise), expected)
+    record('mtimeBoundary', {
+      nativeModifiedMs: actual.modifiedMs,
+      bunMtimeMs: statSync(file).mtimeMs,
+      bunMtimeNs: precise.toString(),
+      rawWindowsFiletimeTicks: boundaryTicks,
+    })
+  }
 
   // Binary chunks round-trip byte for byte at the chunk bound.
   const binary = new Uint8Array(16_384).map((_, index) => (index * 31) & 0xff)

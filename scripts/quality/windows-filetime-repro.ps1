@@ -19,7 +19,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot identify the pinned Bun runtime' }
 $plan = @{
   pairs = $Pairs
   ordering = 'development/AOT on even pairs; AOT/development on odd pairs'
-  assertion = 'unchanged native/Bun mtime difference < 1 ms; retain all outcomes'
+  assertion = 'exact native whole milliseconds against Bun nanoseconds; retain all outcomes'
+  boundaryControl = 'also set and independently read the 9999-tick FILETIME boundary'
   source = (git rev-parse HEAD)
   bunRevision = $revision
   bunSha256 = (Get-FileHash -Algorithm SHA256 $bun).Hash
@@ -49,6 +50,7 @@ for ($pair = 0; $pair -lt $Pairs; $pair++) {
       $start.RedirectStandardError = $true
       $start.Environment['BUN_NATIVE_FILESYSTEM_EVIDENCE'] = $directory
       $start.Environment['BUN_NATIVE_FILESYSTEM_MODE'] = $mode
+      $start.Environment['BUN_NATIVE_MTIME_BOUNDARY'] = '1'
       $process = [Diagnostics.Process]::new()
       $process.StartInfo = $start
       if (!$process.Start()) { throw 'Fixture process did not start' }
@@ -68,6 +70,9 @@ for ($pair = 0; $pair -lt $Pairs; $pair++) {
       $report = Get-Content -Raw (Join-Path $directory 'filesystem-grants.json') | ConvertFrom-Json
       if ($report.platform -ne 'win32' -or $report.backend -ne 'ntcreatefile_walk' -or $report.mode -ne $mode -or $report.revision -ne $revision) {
         throw 'Fixture report identity mismatch'
+      }
+      if ($null -eq $report.outcomes.mtimeBoundary -or $report.outcomes.mtimeBoundary.nativeModifiedMs -ne 1700000000000 -or $report.outcomes.mtimeBoundary.rawWindowsFiletimeTicks -ne '133444736000009999') {
+        throw 'The native FILETIME boundary control was not verified'
       }
       $record.status = 'passed'
     } catch {
