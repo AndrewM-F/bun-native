@@ -10,7 +10,7 @@ on:
       retention-diagnostic:
         description: Run the isolated Windows retention scan control only
         type: choice
-        options: ['none', 'narrow-scan']
+        options: ['none', 'narrow-scan', 'batch-release']
         default: 'none'
       trials:
         description: Measured timed trials per artifact (3 to 30)
@@ -58,7 +58,7 @@ concurrency:
 jobs:
   linux:
     name: Linux core/Solid/React development and AOT comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic != 'narrow-scan')
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic == 'none')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -233,7 +233,7 @@ jobs:
   # The hosted VM's paravirtual Metal device is not a physical GPU.
   macos:
     name: macOS core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic != 'narrow-scan')
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic == 'none')
     runs-on: macos-15
     timeout-minutes: 60
     defaults:
@@ -316,7 +316,7 @@ jobs:
   # benchmarks/comparison/windows-processes.ts. The VM has no physical GPU.
   windows:
     name: Windows core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic != 'narrow-scan')
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic == 'none')
     runs-on: windows-2022
     timeout-minutes: 75
     defaults:
@@ -488,4 +488,52 @@ jobs:
           path: |
             ${{ runner.temp }}/windows-retention-scan/
             !${{ runner.temp }}/windows-retention-scan/**/*.exe
+          retention-days: 30
+
+  windows-batch-release:
+    name: Windows paired batch-release control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'batch-release'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Build pinned baseline and candidate workloads
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'batch-release-control'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          python benchmarks/retention/batch-release-build.py $root
+          if ($LASTEXITCODE -ne 0) { throw 'Source-matched control build failed' }
+      - name: Alternate source variants and check pinned control
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'batch-release-control'
+          $runtime = (Get-Command bun -CommandType Application).Source
+          foreach ($trial in 0..4) {
+            $order = if ($trial % 2 -eq 0) { @('baseline', 'candidate') } else { @('candidate', 'baseline') }
+            foreach ($variant in $order) {
+              python benchmarks/retention/headless-adapter-control.py react (Join-Path $root 'peer.exe') (Join-Path $root "$variant/application.js") (Join-Path $root "$variant.exe") (Join-Path $root "$trial-$variant") 1 $runtime
+              if ($LASTEXITCODE -ne 0) { throw "$variant pair failed outside retention observation" }
+            }
+          }
+          python benchmarks/retention/react-dispatch-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'positive-candidate') 1 cycle $runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate positive control failed' }
+      - name: Retain observations and failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-batch-release-control
+          path: |
+            ${{ runner.temp }}/batch-release-control/
+            !${{ runner.temp }}/batch-release-control/**/*.exe
           retention-days: 30
