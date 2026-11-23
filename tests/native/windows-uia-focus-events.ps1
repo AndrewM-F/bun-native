@@ -81,16 +81,20 @@ public static class BunNativeFocusEvents {
     @(
       $automation::NativeWindowHandleProperty, $automation::FrameworkIdProperty,
       $automation::AutomationIdProperty, $automation::ClassNameProperty,
-      $automation::ControlTypeProperty, $automation::ProviderDescriptionProperty,
+      $automation::ControlTypeProperty,
       $automation::ProcessIdProperty, $automation::IsTextPatternAvailableProperty,
       $automation::IsContentElementProperty, $automation::IsControlElementProperty,
       $automation::NameProperty, $automation::LocalizedControlTypeProperty
     ) | ForEach-Object { $cache.Add($_) }
+    # UIA_ProviderDescriptionPropertyId is 30107. Older managed clients do
+    # not always register this identifier; record whether it was available.
+    $providerDescription = [System.Windows.Automation.AutomationProperty]::LookupById(30107)
+    if ($providerDescription) { $cache.Add($providerDescription) }
     $cache.Add([System.Windows.Automation.TextPattern]::Pattern)
     $activation = $cache.Activate()
     try { [BunNativeFocusEvents]::Start($processId, $Output) }
     finally { $activation.Dispose() }
-    [System.IO.File]::WriteAllText("$Output.cache-control", 'NVDA-like cached properties and TextPattern requested')
+    [System.IO.File]::WriteAllText("$Output.cache-control", "NVDA-like cached properties and TextPattern requested; providerDescriptionAvailable=$([bool]$providerDescription)")
   } else {
     [BunNativeFocusEvents]::Start($processId, $Output)
   }
