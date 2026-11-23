@@ -438,6 +438,165 @@ class PaintObservationTests(unittest.TestCase):
             process.stdout.close()
             process.stderr.close()
 
+    def test_sigterm_during_completion_wait_does_not_strand_reader(self):
+        report = self.path.with_suffix(".completion-cleanup.json")
+        script = (
+            "import json,os,pathlib,signal,sys,threading,time\n"
+            "sys.path.insert(0,sys.argv[1])\n"
+            "from scripts.quality.native_harness import native_paint_observer as module\n"
+            "def stop(*args): raise InterruptedError('cancelled')\n"
+            "signal.signal(signal.SIGTERM,stop)\n"
+            "baseline=len(list(pathlib.Path('/proc/self/fd').iterdir()))\n"
+            "observer=module.PaintObserver(sys.argv[2],'run',json.loads(sys.argv[3]),timeout=8)\n"
+            # Reproduce a signal after Event.wait's condition lock is acquired
+            # but before its context manager has installed the unlock handler.
+            "class InterruptingCondition(threading.Condition):\n"
+            " def __enter__(self):\n"
+            "  result=super().__enter__()\n"
+            "  if threading.current_thread() is threading.main_thread(): os.kill(os.getpid(),signal.SIGTERM)\n"
+            "  return result\n"
+            "observer.done._cond=InterruptingCondition(threading.Lock())\n"
+            "try:\n"
+            " with observer:\n"
+            "  observer.begin(); print('ready',flush=True); observer.result(time.monotonic_ns())\n"
+            "except InterruptedError:\n"
+            " pathlib.Path(sys.argv[4]).write_text(json.dumps({'alive':observer.thread.is_alive(),'descriptors':observer.descriptors,'fd_delta':len(list(pathlib.Path('/proc/self/fd').iterdir()))-baseline}))\n"
+        )
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(ROOT),
+                str(self.path),
+                json.dumps(EXPECTED),
+                str(report),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            ready, _, _ = select.select([process.stdout], [], [], 3)
+            self.assertTrue(ready)
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            # Give the child time to enter its completion wait. The old wait
+            # triggers the injected signal while holding the condition lock.
+            time.sleep(0.1)
+            process.send_signal(signal.SIGTERM)
+            _stdout, stderr = process.communicate(timeout=3)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(
+                json.loads(report.read_text()),
+                {"alive": False, "descriptors": [], "fd_delta": 0},
+            )
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+            process.stdout.close()
+            process.stderr.close()
+
+    def test_sigterm_delivered_to_reader_wakes_main_completion_wait(self):
+        report = self.path.with_suffix(".reader-signal-cleanup.json")
+        script = (
+            "import json,os,pathlib,signal,sys,threading,time\n"
+            "sys.path.insert(0,sys.argv[1])\n"
+            "from scripts.quality.native_harness import native_paint_observer as module\n"
+            "def stop(*args): raise InterruptedError('cancelled')\n"
+            "signal.signal(signal.SIGTERM,stop)\n"
+            "baseline=len(list(pathlib.Path('/proc/self/fd').iterdir()))\n"
+            "observer=module.PaintObserver(sys.argv[2],'run',json.loads(sys.argv[3]),timeout=8)\n"
+            "def signal_reader():\n"
+            " time.sleep(0.1); signal.pthread_kill(observer.thread.ident,signal.SIGTERM)\n"
+            "try:\n"
+            " with observer:\n"
+            "  observer.begin(); threading.Thread(target=signal_reader,daemon=True).start(); observer.result(time.monotonic_ns())\n"
+            "except InterruptedError:\n"
+            " pathlib.Path(sys.argv[4]).write_text(json.dumps({'alive':observer.thread.is_alive(),'descriptors':observer.descriptors,'fd_delta':len(list(pathlib.Path('/proc/self/fd').iterdir()))-baseline}))\n"
+        )
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(ROOT),
+                str(self.path),
+                json.dumps(EXPECTED),
+                str(report),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            _stdout, stderr = process.communicate(timeout=3)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(
+                json.loads(report.read_text()),
+                {"alive": False, "descriptors": [], "fd_delta": 0},
+            )
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+            process.stdout.close()
+            process.stderr.close()
+
+    def test_sigterm_during_reader_preparation_does_not_strand_reader(self):
+        report = self.path.with_suffix(".preparation-cleanup.json")
+        script = (
+            "import json,os,pathlib,signal,sys,threading,time\n"
+            "sys.path.insert(0,sys.argv[1])\n"
+            "from scripts.quality.native_harness import native_paint_observer as module\n"
+            "def stop(*args): raise InterruptedError('cancelled')\n"
+            "signal.signal(signal.SIGTERM,stop)\n"
+            "baseline=len(list(pathlib.Path('/proc/self/fd').iterdir()))\n"
+            "observer=module.PaintObserver(sys.argv[2],'run',json.loads(sys.argv[3]),timeout=8)\n"
+            "class InterruptingCondition(threading.Condition):\n"
+            " def __enter__(self):\n"
+            "  result=super().__enter__()\n"
+            "  if threading.current_thread() is threading.main_thread(): os.kill(os.getpid(),signal.SIGTERM)\n"
+            "  return result\n"
+            "observer.ready._cond=InterruptingCondition(threading.Lock())\n"
+            "try:\n"
+            " with observer:\n"
+            "  observer.begin(); print('ready',flush=True); observer.result(time.monotonic_ns())\n"
+            "except InterruptedError:\n"
+            " pathlib.Path(sys.argv[4]).write_text(json.dumps({'alive':observer.thread.is_alive(),'descriptors':observer.descriptors,'fd_delta':len(list(pathlib.Path('/proc/self/fd').iterdir()))-baseline}))\n"
+        )
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(ROOT),
+                str(self.path),
+                json.dumps(EXPECTED),
+                str(report),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            ready, _, _ = select.select([process.stdout], [], [], 3)
+            self.assertTrue(ready)
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            process.send_signal(signal.SIGTERM)
+            _stdout, stderr = process.communicate(timeout=3)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(
+                json.loads(report.read_text()),
+                {"alive": False, "descriptors": [], "fd_delta": 0},
+            )
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+            process.stdout.close()
+            process.stderr.close()
+
 
 if __name__ == "__main__":
     unittest.main()

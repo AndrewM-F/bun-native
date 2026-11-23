@@ -11,6 +11,7 @@ import json
 import logging
 import math
 import os
+import select
 import selectors
 import stat
 import struct
@@ -140,9 +141,8 @@ class PaintObserver:
         self.deadline = time.monotonic() + timeout
         self.descriptors = []
         self.thread = None
-        self.begin_signal = threading.Event()
         self.ready = threading.Event()
-        self.cancelled = threading.Event()
+        self.cancelled = False
         self.done = threading.Event()
         self.started_ns = None
         self.observed = None
@@ -187,12 +187,23 @@ class PaintObserver:
                 raise OSError(ctypes.get_errno(), "Cannot watch native evidence file")
             self.cancel_read, self.cancel_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
             self.descriptors.extend([self.cancel_read, self.cancel_write])
+            self.begin_read, self.begin_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+            self.descriptors.extend([self.begin_read, self.begin_write])
+            self.ready_read, self.ready_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+            self.descriptors.extend([self.ready_read, self.ready_write])
+            self.done_read, self.done_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+            self.descriptors.extend([self.done_read, self.done_write])
             self._file_size()
             self.thread = threading.Thread(
                 target=self._observe, name="native-paint-observer"
             )
             self.thread.start()
-            if not self.ready.wait(min(1, max(0, self.deadline - time.monotonic()))):
+            self._wait_for(
+                self.ready_read,
+                self.ready,
+                min(1, max(0, self.deadline - time.monotonic())),
+            )
+            if not self.ready.is_set():
                 if time.monotonic() >= self.deadline:
                     raise TimeoutError("Native paint observation deadline expired")
                 raise RuntimeError("Native paint observer did not become ready")
@@ -230,7 +241,7 @@ class PaintObserver:
             self.file, min(self.offset, 64), max(0, self.offset - 64)
         )
         self.started_ns = time.monotonic_ns()
-        self.begin_signal.set()
+        os.write(self.begin_write, b"x")
         return self.started_ns
 
     def _drain_notifications(self):
@@ -324,22 +335,39 @@ class PaintObserver:
     def _observe(self):
         try:
             with selectors.DefaultSelector() as selector:
-                selector.register(self.notifications_fd, selectors.EVENT_READ)
                 selector.register(self.cancel_read, selectors.EVENT_READ)
+                selector.register(self.begin_read, selectors.EVENT_READ)
                 self.ready.set()
-                self.begin_signal.wait(max(0, self.deadline - time.monotonic()))
-                if self.cancelled.is_set():
+                os.write(self.ready_write, b"x")
+                while not self.cancelled:
+                    remaining = self.deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            "Native paint observation deadline expired before input"
+                        )
+                    available = selector.select(remaining)
+                    if self.cancelled:
+                        return
+                    if not available:
+                        raise TimeoutError(
+                            "Native paint observation deadline expired before input"
+                        )
+                    if any(key.fd == self.begin_read for key, _ in available):
+                        break
+                if self.cancelled:
                     return
                 if self.started_ns is None:
                     raise TimeoutError(
                         "Native paint observation deadline expired before input"
                     )
-                while not self.cancelled.is_set():
+                selector.unregister(self.begin_read)
+                selector.register(self.notifications_fd, selectors.EVENT_READ)
+                while not self.cancelled:
                     remaining = self.deadline - time.monotonic()
                     if remaining <= 0:
                         raise TimeoutError("Native paint observation deadline expired")
                     available = selector.select(remaining)
-                    if self.cancelled.is_set():
+                    if self.cancelled:
                         return
                     if not available:
                         raise TimeoutError("Native paint observation deadline expired")
@@ -353,11 +381,40 @@ class PaintObserver:
             LOGGER.exception("Owned native paint observer reader failed")
         finally:
             self.done.set()
+            if hasattr(self, "done_write"):
+                try:
+                    os.write(self.done_write, b"x")
+                except (BlockingIOError, OSError):
+                    pass
+
+    @staticmethod
+    def _wait_for(descriptor, event, timeout):
+        if event.is_set():
+            return
+        poller = select.poll()
+        poller.register(descriptor, select.POLLIN)
+        until_ns = time.monotonic_ns() + math.ceil(timeout * 1_000_000_000)
+        # A signal can interrupt a different thread. Return to Python
+        # periodically so the main-thread handler runs promptly.
+        while not event.is_set():
+            remaining_ns = until_ns - time.monotonic_ns()
+            if remaining_ns <= 0:
+                break
+            poller.poll(min(100, math.ceil(remaining_ns / 1_000_000)))
 
     def result(self, command_completed_ns):
         if self.started_ns is None:
             raise RuntimeError("Native paint observation was not started")
-        self.done.wait(max(0, self.deadline - time.monotonic()) + 0.1)
+        # Event.wait() can be interrupted by SIGTERM between acquiring its
+        # condition lock and entering its context manager. That strands the
+        # worker in done.set() while cleanup joins it. Waiting on the pipe
+        # holds no Python lock when the cancellation handler raises.
+        if not self.done.is_set():
+            self._wait_for(
+                self.done_read,
+                self.done,
+                max(0, self.deadline - time.monotonic()) + 0.1,
+            )
         if self.failure is not None:
             raise self.failure
         if self.observed is None:
@@ -396,8 +453,7 @@ class PaintObserver:
         if self.closed:
             return
         self.closed = True
-        self.cancelled.set()
-        self.begin_signal.set()
+        self.cancelled = True
         if hasattr(self, "cancel_write"):
             try:
                 os.write(self.cancel_write, b"x")

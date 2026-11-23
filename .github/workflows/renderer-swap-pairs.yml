@@ -54,7 +54,7 @@ jobs:
           python3 - <<'PY2'
           import os
           from pathlib import Path
-          allowed = {'.github/workflows/renderer-swap-pairs.yml', 'benchmarks/renderer/README.md', 'benchmarks/renderer/commit.ts', 'benchmarks/renderer/swap-native.ts', 'benchmarks/renderer/swap-native-pairs.py', 'benchmarks/renderer/swap-renderer-pairs.py', 'packages/renderer/src/native-tree.ts', 'tests/renderers/incremental-commit.test.ts', 'tests/quality/test_renderer_swap_pairs.py', 'tests/quality/ci-event-coverage.test.ts'}
+          allowed = {'.github/workflows/renderer-swap-pairs.yml', 'benchmarks/renderer/README.md', 'benchmarks/renderer/commit.ts', 'benchmarks/renderer/swap-native.ts', 'benchmarks/renderer/swap-native-pairs.py', 'benchmarks/renderer/swap-renderer-pairs.py', 'packages/renderer/src/native-tree.ts', 'scripts/quality/native_harness/native_paint_observer.py', 'tests/quality/test_native_paint_observer.py', 'tests/renderers/incremental-commit.test.ts', 'tests/quality/test_renderer_swap_pairs.py', 'tests/quality/ci-event-coverage.test.ts'}
           changed = set((Path(os.environ['RUNNER_TEMP']) / 'renderer-swap-changed.txt').read_text().splitlines())
           if not changed or changed - allowed:
               raise SystemExit(f'Unexpected source changes: {sorted(changed - allowed)}')
@@ -144,7 +144,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $base = '8b125642bdb2a311851970d25990947033cb33af'
           if ((git -C .baseline rev-parse HEAD) -ne $base -or (git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Wrong source identity' }
-          $allowed = @('.github/workflows/renderer-swap-pairs.yml', 'benchmarks/renderer/README.md', 'benchmarks/renderer/commit.ts', 'benchmarks/renderer/swap-native.ts', 'benchmarks/renderer/swap-native-pairs.py', 'benchmarks/renderer/swap-renderer-pairs.py', 'packages/renderer/src/native-tree.ts', 'tests/renderers/incremental-commit.test.ts', 'tests/quality/test_renderer_swap_pairs.py', 'tests/quality/ci-event-coverage.test.ts')
+          $allowed = @('.github/workflows/renderer-swap-pairs.yml', 'benchmarks/renderer/README.md', 'benchmarks/renderer/commit.ts', 'benchmarks/renderer/swap-native.ts', 'benchmarks/renderer/swap-native-pairs.py', 'benchmarks/renderer/swap-renderer-pairs.py', 'packages/renderer/src/native-tree.ts', 'scripts/quality/native_harness/native_paint_observer.py', 'tests/quality/test_native_paint_observer.py', 'tests/renderers/incremental-commit.test.ts', 'tests/quality/test_renderer_swap_pairs.py', 'tests/quality/ci-event-coverage.test.ts')
           $changed = @(git diff --name-only $base $env:GITHUB_SHA)
           if ($changed.Count -eq 0 -or @($changed | Where-Object { $_ -notin $allowed }).Count -ne 0) { throw "Unexpected source changes: $changed" }
           $changed | Set-Content (Join-Path $env:RUNNER_TEMP 'renderer-only-changed.txt')
