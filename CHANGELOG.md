@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.37.4](https://github.com/AndrewM-F/bun-native/compare/v0.37.3...v0.37.4) (2026-11-23)
+
+
+### Bug Fixes
+
+* **test:** compare filesystem timestamps at exact precision ([#758](https://github.com/AndrewM-F/bun-native/issues/758)) ([09ab988](https://github.com/AndrewM-F/bun-native/commit/09ab988aa9f74faf5585d6d03e7617822ce65e87))
+
+
+### Tests
+
+* **macos:** capture drag entry diagnostics ([#759](https://github.com/AndrewM-F/bun-native/issues/759)) ([cfa5dfc](https://github.com/AndrewM-F/bun-native/commit/cfa5dfc91980c02fd0f36f394585c1af6aa9885d))
+* **macos:** record VoiceOver observation timing ([#761](https://github.com/AndrewM-F/bun-native/issues/761)) ([1f780ad](https://github.com/AndrewM-F/bun-native/commit/1f780ad9283a137b7fb47cd1df1ab3195e183716))
+
 ## [0.37.3](https://github.com/AndrewM-F/bun-native/compare/v0.37.2...v0.37.3) (2026-11-23)
 
 
