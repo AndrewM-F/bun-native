@@ -31,18 +31,51 @@ on:
         description: Run the fixed-count Windows filesystem timestamp diagnostic only
         type: boolean
         default: false
+      filetime-rounding:
+        description: Run the independent Windows FILETIME rounding control only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-platforms-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: native-platforms-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && (inputs.filetime-repro && '-filetime-repro' || inputs.filetime-rounding && '-filetime-rounding' || '') || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  windows-filetime-rounding:
+    name: Windows FILETIME rounding control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.filetime-rounding && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Measure exact FILETIME boundaries
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'filetime-rounding'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          ./scripts/quality/windows-filetime-rounding.ps1 -Output $root
+      - name: Retain every boundary observation
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-filetime-rounding
+          path: ${{ runner.temp }}/filetime-rounding/
+          if-no-files-found: warn
+          retention-days: 30
+
   windows-filetime-repro:
     name: Windows filesystem timestamp reproduction
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.filetime-repro && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.filetime-repro && !inputs.filetime-rounding && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 60
     defaults:
@@ -94,7 +127,7 @@ jobs:
 
   native:
     name: GPUI release and native paint (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || !inputs.filetime-repro)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || (!inputs.filetime-repro && !inputs.filetime-rounding))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     # Each OS was one serial ~9 min job. Every shard builds the same release
