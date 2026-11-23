@@ -26,29 +26,51 @@ def variant_source(source, clear):
 
 
 def listener_source(source, variant):
-    if variant not in ("baseline", "clear-setters", "clear-listener", "pin-listener"):
+    if variant not in (
+        "baseline",
+        "clear-setters",
+        "clear-listener",
+        "clear-view-listener",
+        "pin-listener",
+        "pin-root",
+    ):
         raise ValueError("Unknown listener control variant")
     source = replace_once(
         source,
         "  const listener = () => {\n",
         "  let listener: (() => void) | undefined = () => {\n",
     )
-    if variant == "pin-listener":
+    source = replace_once(
+        source,
+        "  const view = render(<App />, window)\n",
+        "  let view = render(<App />, window)\n  let disposedMutations: typeof view.diagnostics.mutations | undefined\n",
+    )
+    source = replace_once(
+        source,
+        "      mutations: { ...view.diagnostics.mutations },\n",
+        "      mutations: { ...(disposedMutations ?? view.diagnostics.mutations) },\n",
+    )
+    if variant in ("pin-listener", "pin-root"):
         marker = "  if (!content.current) throw new Error('React content ref was not attached at native readiness')\n"
+        pin = "listener" if variant == "pin-listener" else "view"
         source = replace_once(
             source,
             marker,
             marker
-            + "  ;(globalThis as unknown as { __listenerDiagnosticPin?: object }).__listenerDiagnosticPin = listener\n",
+            + f"  ;(globalThis as unknown as {{ __listenerDiagnosticPin?: object }}).__listenerDiagnosticPin = {pin}\n",
         )
     action = {
         "baseline": "",
         "clear-setters": " setText = undefined!; setRows = undefined!;",
         "clear-listener": " listener = undefined;",
+        "clear-view-listener": " listener = undefined; view = undefined!;",
         "pin-listener": "",
+        "pin-root": "",
     }[variant]
     return replace_once(
-        source, MARKER, f"async dispose() {{ await view.dispose();{action} }},"
+        source,
+        MARKER,
+        f"async dispose() {{ await view.dispose(); disposedMutations = {{ ...view.diagnostics.mutations }};{action} }},",
     )
 
 
@@ -218,7 +240,14 @@ def main():
         if kind == "cycle"
         else ("baseline", "omit-first", "pin-baseline", "pin-omit-first")
         if kind == "first-observation"
-        else ("baseline", "clear-setters", "clear-listener", "pin-listener")
+        else (
+            "baseline",
+            "clear-setters",
+            "clear-listener",
+            "clear-view-listener",
+            "pin-listener",
+            "pin-root",
+        )
         if kind == "listener"
         else ("baseline", "clear")
     )
@@ -398,6 +427,12 @@ def main():
                             (child_output / f"00-{record['mode']}.json").read_text()
                         )
                         valid = valid and listener_pin_valid(raw, record["mode"])
+                if valid and kind == "listener" and variant == "pin-root":
+                    for record in records:
+                        raw = json.loads(
+                            (child_output / f"00-{record['mode']}.json").read_text()
+                        )
+                        valid = valid and cycle_pin_valid(raw, record["mode"])
                 if valid and kind == "first-observation":
                     for record in records:
                         raw = json.loads(

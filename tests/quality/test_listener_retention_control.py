@@ -28,6 +28,13 @@ class ListenerRetentionControlTests(unittest.TestCase):
         self.assertIn(
             "__listenerDiagnosticPin", CONTROL.listener_source(source, "pin-listener")
         )
+        self.assertIn(
+            "view = undefined", CONTROL.listener_source(source, "clear-view-listener")
+        )
+        self.assertIn(
+            "__listenerDiagnosticPin = view",
+            CONTROL.listener_source(source, "pin-root"),
+        )
         with self.assertRaises(ValueError):
             CONTROL.listener_source(source, "unknown")
 
