@@ -13,6 +13,7 @@ try {
   $references = @(
     [System.Windows.Automation.Automation].Assembly.Location,
     [System.Windows.Automation.AutomationElement].Assembly.Location,
+    [System.Windows.Automation.AutomationFocusChangedEventArgs].Assembly.Location,
     [System.Windows.Rect].Assembly.Location,
     'System.dll', 'System.Core.dll'
   ) | Select-Object -Unique
