@@ -32,23 +32,31 @@ export function parseFiletimeEvidence(text: string): string | null {
   return BigInt(value) <= 0xffff_ffff_ffff_ffffn ? value : null
 }
 
+type FiletimeRunner = (
+  command: string[],
+  env: NodeJS.ProcessEnv
+) => {
+  success: boolean
+  stdout: Uint8Array
+}
+
 /** Best effort: an unavailable diagnostic must never replace the original failure. */
-export function windowsFiletimeEvidence(path: string): string | null {
-  if (process.platform !== 'win32') return null
+export function windowsFiletimeEvidence(
+  path: string,
+  platform = process.platform,
+  run?: FiletimeRunner
+): string | null {
+  if (platform !== 'win32') return null
   try {
     const powershell = `${process.env['SystemRoot']}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
     const command = Buffer.from(readFiletime, 'utf16le').toString('base64')
-    const result = Bun.spawnSync(
-      [powershell, '-NoProfile', '-NonInteractive', '-EncodedCommand', command],
-      {
-        env: { ...process.env, BUN_NATIVE_MTIME_EVIDENCE_PATH: path },
-        stdout: 'pipe',
-        stderr: 'ignore',
-        timeout: 15_000,
-      }
-    )
+    const argv = [powershell, '-NoProfile', '-NonInteractive', '-EncodedCommand', command]
+    const env = { ...process.env, BUN_NATIVE_MTIME_EVIDENCE_PATH: path }
+    const result = run
+      ? run(argv, env)
+      : Bun.spawnSync(argv, { env, stdout: 'pipe', stderr: 'ignore', timeout: 15_000 })
     if (!result.success || result.stdout.length > 64) return null
-    return parseFiletimeEvidence(result.stdout.toString())
+    return parseFiletimeEvidence(Buffer.from(result.stdout).toString())
   } catch {
     return null
   }

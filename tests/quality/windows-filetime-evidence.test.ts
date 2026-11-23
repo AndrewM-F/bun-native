@@ -9,6 +9,33 @@ test('Windows FILETIME evidence accepts only bounded unsigned decimal ticks', ()
   if (process.platform !== 'win32') expect(windowsFiletimeEvidence('ignored')).toBeNull()
 })
 
+test('failure evidence passes the path as data and never masks the original failure', () => {
+  const path = 'C:\\fixture with spaces\\test.txt'
+  const ok = windowsFiletimeEvidence(path, 'win32', (command, env) => {
+    expect(command.slice(1, 4)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
+    expect(command.join(' ')).not.toContain(path)
+    expect(env['BUN_NATIVE_MTIME_EVIDENCE_PATH']).toBe(path)
+    return { success: true, stdout: Buffer.from('116444736000000000') }
+  })
+  expect(ok).toBe('116444736000000000')
+  expect(
+    windowsFiletimeEvidence(path, 'linux', () => {
+      throw new Error('must not run')
+    })
+  ).toBeNull()
+  expect(
+    windowsFiletimeEvidence(path, 'win32', () => {
+      throw new Error('failed')
+    })
+  ).toBeNull()
+  expect(
+    windowsFiletimeEvidence(path, 'win32', () => ({ success: false, stdout: Buffer.from('1') }))
+  ).toBeNull()
+  expect(
+    windowsFiletimeEvidence(path, 'win32', () => ({ success: true, stdout: Buffer.alloc(65) }))
+  ).toBeNull()
+})
+
 test.skipIf(process.platform !== 'win32')(
   'reads a real Windows FILETIME without exposing the path',
   () => {
