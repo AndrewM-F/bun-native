@@ -62,7 +62,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: benchmark-comparison-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: benchmark-comparison-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic != 'none' && format('-{0}', inputs.retention-diagnostic) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
