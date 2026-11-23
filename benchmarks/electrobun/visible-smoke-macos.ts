@@ -220,6 +220,20 @@ async function snapshot(
     Math.floor(36 * scale),
   ] as const
   const correspondence = compareVisiblePixels(png, surface, region, 0)
+  if (name.startsWith('post-') && correspondence.changedPixels !== 0) {
+    // The display and window are captured sequentially. Preserve the guards
+    // and capture times when they disagree, without accepting the sample.
+    result['captureMismatch'] = {
+      name,
+      displayPath: path,
+      surfacePath,
+      captureStartedAt: before,
+      displayCapturedAt: captured,
+      surfaceCapturedAt: surfaceCaptured,
+      correspondence,
+      guard: { before: beforeGuard, after: afterGuard },
+    }
+  }
   assert.equal(
     correspondence.changedPixels,
     0,
