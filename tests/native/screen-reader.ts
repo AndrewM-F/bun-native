@@ -396,6 +396,7 @@ class VoiceOver implements Reader {
   #attachStartMs: number | null = null
   #attachEndMs: number | null = null
   #polling = false
+  #pollInFlight = false
   #poller: Promise<void> | undefined
   #pid = 0
 
@@ -431,13 +432,16 @@ class VoiceOver implements Reader {
     this.#poller = (async () => {
       while (this.#polling) {
         const pollStart = performance.now() - started
+        const hostPidStart = this.#pid
+        this.#pollInFlight = true
         const phrase = await osascript(
           'tell application "VoiceOver" to return content of last phrase'
         ).catch(() => '')
         const pollEnd = performance.now() - started
+        this.#pollInFlight = false
         if (phrase && phrase !== this.#phrases.at(-1)) {
           this.#phrases.push(phrase)
-          this.#timing.add(this.#phrases.length - 1, pollStart, pollEnd, this.#pid)
+          this.#timing.add(this.#phrases.length - 1, pollStart, pollEnd, hostPidStart, this.#pid)
         }
         await Bun.sleep(50)
       }
@@ -483,6 +487,7 @@ class VoiceOver implements Reader {
       attachStartMs: this.#attachStartMs,
       attachEndMs: this.#attachEndMs,
       capturedAtMs: performance.now() - started,
+      pollInFlight: this.#pollInFlight,
       ...this.#timing.snapshot(),
     }
   }
