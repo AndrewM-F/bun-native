@@ -241,8 +241,9 @@ trims the common ends and runs its longest-subsequence search over typed
 arrays, returning flags by desired index instead of a set.
 
 What remains proportional to the tree: a recaptured wide parent still copies
-its child list, and a reorder whose middle spans the list (the `swap` rows)
-still builds one position map over that middle. Solid's own `<For>` mapping
+its child list, and general reorders still build a position map over the changed
+middle. Wide simple swaps and last-child-to-front rotations use dedicated scans.
+Solid's own `<For>` mapping
 and react-reconciler's `getHostSibling` dominate the adapters' `sync` time.
 
 ## Clearing a suffix through core
