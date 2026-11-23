@@ -20,7 +20,7 @@ $records = [Collections.Generic.List[object]]::new()
 foreach ($linkage in @('weak', 'strong')) {
   foreach ($lto in @('off', 'on')) {
    foreach ($definitionLto in @('off', 'on')) {
-    foreach ($placement in @('object', 'archive')) {
+    foreach ($placement in @('object', 'archive', 'none')) {
     $directory = Join-Path $root "$linkage-$lto-definition-$definitionLto-$placement"
     New-Item -ItemType Directory -Path $directory | Out-Null
     $attribute = if ($linkage -eq 'weak') { '__attribute__((weak)) ' } else { '' }
@@ -46,6 +46,8 @@ foreach ($linkage in @('weak', 'strong')) {
       & $librarian "/out:$archive" $objects[2] *> (Join-Path $directory 'archive.log')
       if ($LASTEXITCODE -ne 0) { throw 'Creating the definition archive failed' }
       $objects = @($objects[0], $objects[1], $archive)
+    } elseif ($placement -eq 'none') {
+      $objects = @($objects[0], $objects[1])
     }
     $dll = Join-Path $directory 'control.dll'
     & $linker /dll /noentry /nodefaultlib /opt:noref /LTCG /opt:lldlto=2 /opt:lldltocgo=2 "/out:$dll" @objects *> (Join-Path $directory 'link.log')
@@ -60,7 +62,8 @@ foreach ($linkage in @('weak', 'strong')) {
     })
     ConvertTo-Json -InputObject ($records.ToArray()) -Depth 5 | Set-Content -Encoding utf8 (Join-Path $root 'results.json')
     Write-Output "$linkage/$lto/definition-$definitionLto/$placement link exit $linkExit"
-    if ($linkage -eq 'strong' -and $linkExit -ne 0) { throw 'Strong-import positive control failed' }
+    if ($linkage -eq 'strong' -and $placement -ne 'none' -and $linkExit -ne 0) { throw 'Strong-import positive control failed' }
+    if ($linkage -eq 'strong' -and $placement -eq 'none' -and $linkExit -eq 0) { throw 'Missing strong definition unexpectedly linked' }
   }
   }
   }
