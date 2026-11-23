@@ -43,17 +43,29 @@ int main(void) {
             fprintf(stderr, "Old session movement leaked: %ld\n", (long)sessionMoves);
             return 1;
         }
-        if (isfinite(sessionPoint.x) || isfinite(sessionPoint.y)) return 2;
+        if (isfinite(sessionPoint.x) || isfinite(sessionPoint.y)) {
+            fprintf(stderr, "Old session position leaked\n");
+            return 2;
+        }
         primaryHeight = 800;
         [view draggingSession:(NSDraggingSession *)(id)[FakeSession new]
                  movedToPoint:NSMakePoint(362, 445)];
         CGPoint point;
-        if (session_moves(&point) != 1 || point.x != 362 || point.y != 355) return 3;
+        if (session_moves(&point) != 1 || point.x != 362 || point.y != 355) {
+            fprintf(stderr, "First session movement was not recorded\n");
+            return 3;
+        }
         [view mouseDown:event];
-        if (session_moves(&point) != 0 || isfinite(point.x) || isfinite(point.y)) return 4;
+        if (session_moves(&point) != 0 || isfinite(point.x) || isfinite(point.y)) {
+            fprintf(stderr, "Movement was not reset for the second session\n");
+            return 4;
+        }
         [view draggingSession:(NSDraggingSession *)(id)[FakeSession new]
                  movedToPoint:NSMakePoint(120, 650)];
-        if (session_moves(&point) != 1 || point.x != 120 || point.y != 150) return 5;
+        if (session_moves(&point) != 1 || point.x != 120 || point.y != 150) {
+            fprintf(stderr, "Second session movement was not recorded\n");
+            return 5;
+        }
         return 0;
     }
 }
