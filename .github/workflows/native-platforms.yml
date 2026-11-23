@@ -773,6 +773,9 @@ jobs:
             if ($report.platform -ne $platform -or $report.backend -ne $backend -or $report.mode -ne $mode) {
               throw "${{ runner.os }} $mode filesystem grant evidence does not name the $backend backend"
             }
+            if ($IsWindows -and $null -eq $report.outcomes.mtimeBoundary) {
+              throw "$mode filesystem grant evidence lacks the FILETIME boundary control"
+            }
           }
       - name: macOS development and AOT application menu bar (#239)
         if: ${{ matrix.shard == 2 && (runner.os == 'macOS' && !cancelled() && steps.native-build.outcome == 'success') }}
