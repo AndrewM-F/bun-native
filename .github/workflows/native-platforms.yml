@@ -72,6 +72,7 @@ jobs:
           cargo build --locked --release -p bun-native-host 2>&1 | Tee-Object -FilePath (Join-Path $root 'build.log')
           if ($LASTEXITCODE -ne 0) { throw 'Native host build failed' }
           $hostPath = (Resolve-Path 'target/release/bun-native-host.exe').Path
+          $env:BUN_NATIVE_HOST = $hostPath
           "BUN_NATIVE_HOST=$hostPath" >> $env:GITHUB_ENV
           bun test tests/quality/windows-filetime-evidence.test.ts
           if ($LASTEXITCODE -ne 0) { throw 'FILETIME evidence control failed' }

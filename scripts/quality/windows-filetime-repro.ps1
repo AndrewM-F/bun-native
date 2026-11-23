@@ -22,6 +22,8 @@ $plan = @{
   assertion = 'unchanged native/Bun mtime difference < 1 ms; retain all outcomes'
   source = (git rev-parse HEAD)
   bunRevision = $revision
+  bunSha256 = (Get-FileHash -Algorithm SHA256 $bun).Hash
+  fixtureSha256 = (Get-FileHash -Algorithm SHA256 $fixture).Hash
   hostSha256 = (Get-FileHash -Algorithm SHA256 $hostPath).Hash
   aotSha256 = (Get-FileHash -Algorithm SHA256 $aot).Hash
   os = [Runtime.InteropServices.RuntimeInformation]::OSDescription
@@ -74,7 +76,7 @@ for ($pair = 0; $pair -lt $Pairs; $pair++) {
       if ($process) { $process.Dispose(); $process = $null }
     }
     $records.Add([pscustomobject]$record)
-    ConvertTo-Json -InputObject @($records) -Depth 5 | Set-Content -Encoding utf8 (Join-Path $root 'results.json')
+    ConvertTo-Json -InputObject ($records.ToArray()) -Depth 5 | Set-Content -Encoding utf8 (Join-Path $root 'results.json')
     Write-Output "$name $($record.status)"
   }
 }
