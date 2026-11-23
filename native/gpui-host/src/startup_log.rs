@@ -17,11 +17,12 @@ const MAX_MESSAGE_BYTES: usize = 512;
 /// The macOS Metal renderer logs each frame it drops (for example one drawn
 /// outside its display link's update), which a pixel read cannot tell apart
 /// from a frame that was never painted.
-const TARGETS: [&str; 4] = [
+const TARGETS: [&str; 5] = [
     "gpui_linux::linux::x11::window",
     "gpui_wgpu::wgpu_context",
     "gpui_wgpu::wgpu_renderer",
     "gpui_apple::metal_renderer",
+    "bun_native::drag_entry",
 ];
 /// HAL instance construction, captured at debug level so the one-time Vulkan
 /// loader and EGL display setup inside GPU instance creation can be told apart.
@@ -76,6 +77,7 @@ pub(crate) fn install_from_environment() {
         .set(StartupLog(Mutex::new(Output::new(
             file,
             configuration.correlation_id,
+            std::env::var("BUN_NATIVE_STARTUP_LOG_DRAG_ONLY").as_deref() == Ok("1"),
         ))))
         .is_err()
     {
@@ -93,11 +95,13 @@ pub(crate) fn install_from_environment() {
         return;
     }
     log::set_max_level(LevelFilter::Debug);
+    let drag_only = std::env::var("BUN_NATIVE_STARTUP_LOG_DRAG_ONLY").as_deref() == Ok("1");
     if let Ok(mut output) = logger.0.lock()
         && output
             .emit(json!({
                 "phase": "logger_installed", "targets": TARGETS,
                 "maximum_level": "DEBUG", "debug_targets": DEBUG_TARGETS, "max_records": MAX_RECORDS,
+                "drag_only": drag_only,
                 "max_record_bytes": MAX_RECORD_BYTES, "max_total_bytes": MAX_TOTAL_BYTES,
                 "max_message_bytes": MAX_MESSAGE_BYTES,
             }))
@@ -146,21 +150,26 @@ struct Output<W> {
     started: Instant,
     records: usize,
     bytes: usize,
+    drag_only: bool,
 }
 
 impl<W: Write> Output<W> {
-    fn new(sink: W, correlation_id: String) -> Self {
+    fn new(sink: W, correlation_id: String, drag_only: bool) -> Self {
         Self {
             sink: Some(sink),
             correlation_id,
             started: Instant::now(),
             records: 0,
             bytes: 0,
+            drag_only,
         }
     }
 
     fn record(&mut self, record: &Record<'_>) -> io::Result<()> {
-        if self.sink.is_none() || !allowed(record.metadata()) {
+        if self.sink.is_none()
+            || !allowed(record.metadata())
+            || (self.drag_only && record.target() != "bun_native::drag_entry")
+        {
             return Ok(());
         }
         let mut message = BoundedMessage::default();

@@ -101,7 +101,7 @@ fn exact_targets_and_level_filter_before_formatting() {
         }
     }
     let sink = Sink::default();
-    let mut output = Output::new(sink.clone(), "test-nonce".into());
+    let mut output = Output::new(sink.clone(), "test-nonce".into(), false);
     for (target, level) in [
         ("gpui_linux::linux::x11::window::other", Level::Info),
         ("gpui_linux::linux::x11", Level::Error),
@@ -145,9 +145,31 @@ fn exact_targets_and_level_filter_before_formatting() {
 }
 
 #[test]
+fn drag_only_filter_preserves_the_bounded_budget_for_drag_entries() {
+    let sink = Sink::default();
+    let mut output = Output::new(sink.clone(), "test-nonce".into(), true);
+    for _ in 0..MAX_RECORDS * 2 {
+        send(&mut output, "other startup record").unwrap();
+    }
+    assert_eq!(sink.writes.get(), 0);
+    output
+        .record(
+            &Record::builder()
+                .args(format_args!("filename_count=65"))
+                .target("bun_native::drag_entry")
+                .level(Level::Info)
+                .build(),
+        )
+        .unwrap();
+    let captured = records(&sink);
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["message"], "filename_count=65");
+}
+
+#[test]
 fn record_cap_includes_a_single_terminal_record_and_stops_writes() {
     let sink = Sink::default();
-    let mut output = Output::new(sink.clone(), "test-nonce".into());
+    let mut output = Output::new(sink.clone(), "test-nonce".into(), false);
     output.emit(json!({"phase": "logger_installed"})).unwrap();
     for _ in 0..MAX_RECORDS * 2 {
         send(&mut output, "GPU adapter").unwrap();
@@ -162,7 +184,7 @@ fn record_cap_includes_a_single_terminal_record_and_stops_writes() {
 #[test]
 fn total_byte_cap_reserves_a_terminal_record() {
     let sink = Sink::default();
-    let mut output = Output::new(sink.clone(), "test-nonce".into());
+    let mut output = Output::new(sink.clone(), "test-nonce".into(), false);
     for _ in 0..MAX_RECORDS * 2 {
         send(&mut output, &"\"".repeat(MAX_MESSAGE_BYTES)).unwrap();
     }
@@ -175,7 +197,7 @@ fn total_byte_cap_reserves_a_terminal_record() {
 #[test]
 fn utf8_and_json_expansion_are_bounded_and_visible() {
     let sink = Sink::default();
-    let mut output = Output::new(sink.clone(), "test-nonce".into());
+    let mut output = Output::new(sink.clone(), "test-nonce".into(), false);
     send(&mut output, &"漢🙂".repeat(200)).unwrap();
     send(&mut output, &"\u{1}".repeat(MAX_MESSAGE_BYTES)).unwrap();
     let records = records(&sink);
@@ -199,7 +221,7 @@ fn formatting_error_is_reported_without_panicking_or_disabling_output() {
         }
     }
     let sink = Sink::default();
-    let mut output = Output::new(sink.clone(), "test-nonce".into());
+    let mut output = Output::new(sink.clone(), "test-nonce".into(), false);
     output
         .record(
             &Record::builder()
@@ -222,7 +244,7 @@ fn failed_write_disables_capture_without_repeated_io() {
         fail: true,
         ..Sink::default()
     };
-    let mut output = Output::new(sink.clone(), "test-nonce".into());
+    let mut output = Output::new(sink.clone(), "test-nonce".into(), false);
     assert!(send(&mut output, "first").is_err());
     assert!(send(&mut output, "second").is_ok());
     assert_eq!(sink.writes.get(), 1);

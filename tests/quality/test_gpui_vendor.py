@@ -24,6 +24,7 @@ class VendoredGpuiProvenance(unittest.TestCase):
             "gpui_macos": [
                 "metal-display-link-switch.patch",
                 "cvdisplaylink-keep-subscribed.patch",
+                "drag-entry-diagnostics.patch",
             ],
             "gpui_wgpu": ["shared-pipelines.patch", "parallel-pipelines.patch"],
         }

@@ -1,0 +1,57 @@
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -3722,6 +3722,7 @@
+     _: Sel,
+     dragging_info: *mut AnyObject,
+ ) -> NSDragOperation {
++    log::info!(target: "bun_native::drag_entry", "callback_entered");
+     let is_source_window = is_drag_from_this_window(this, dragging_info);
+     let window_state = unsafe { get_window_state(this) };
+     let position = drag_event_position(&window_state, dragging_info);
+@@ -3775,6 +3776,7 @@
+     let mut paths = SmallVec::new();
+     let pasteboard: *mut AnyObject = unsafe { msg_send![dragging_info, draggingPasteboard] };
+     if pasteboard.is_null() {
++        log::info!(target: "bun_native::drag_entry", "pasteboard_unavailable");
+         return None;
+     }
+     #[expect(
+@@ -3783,7 +3785,11 @@
+     )]
+     let filenames: *mut NSArray<NSString> =
+         unsafe { msg_send![pasteboard, propertyListForType: NSFilenamesPboardType] };
+-    let filenames = unsafe { filenames.as_ref() }?;
++    let Some(filenames) = (unsafe { filenames.as_ref() }) else {
++        log::info!(target: "bun_native::drag_entry", "filename_property_unavailable");
++        return None;
++    };
++    log::info!(target: "bun_native::drag_entry", "filename_count={}", filenames.len());
+     for file in filenames {
+         let path = unsafe {
+             let f = file.UTF8String();
+@@ -4119,7 +4125,25 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn missing_drag_pasteboard_returns_no_external_paths() {
++        autoreleasepool(|_| unsafe {
++            let mut builder = ClassBuilder::new(c"GPUIDragMissingPasteboardTest", class!(NSObject))
++                .expect("test dragging-info class");
++            builder.add_method(
++                sel!(draggingPasteboard),
++                missing_drag_pasteboard as extern "C" fn(_, Sel) -> *mut AnyObject,
++            );
++            let info: Retained<AnyObject> = msg_send![builder.register(), new];
++            assert!(external_paths_from_event(Retained::as_ptr(&info).cast_mut()).is_none());
++        });
++    }
+ 
++    extern "C" fn missing_drag_pasteboard(_: &AnyObject, _: Sel) -> *mut AnyObject {
++        ptr::null_mut()
++    }
++
+     #[test]
+     fn display_id_for_screen_handles_missing_metadata() {
+         assert_eq!(display_id_for_screen(ptr::null_mut::<AnyObject>()), None);
