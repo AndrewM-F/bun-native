@@ -621,8 +621,9 @@ after every focus step before it judges VoiceOver.
   containing the name and `button` or `edit`. Optional independent UI Automation
   snapshots record focused controls after the speech deadline; a separate
   bounded observer can record focus-change events from the fixture process.
-  The observer can affect timing and cannot prove an event absent if it fails
-  or drops records. Neither diagnostic replaces the speech assertion.
+  The observer can affect timing; an empty log alone cannot prove the platform
+  emitted no event. Its errors and dropped-record count are retained. Neither
+  diagnostic replaces the speech assertion.
 - Narrator offers no automation interface that this suite uses, and it is not
   run.
 
