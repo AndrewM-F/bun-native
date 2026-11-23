@@ -1,4 +1,4 @@
-"""Adapt pinned Bun's generator invocation to Windows cmd's length limit.
+"""Adapt pinned upstream build scripts for a Windows diagnostic build.
 
 This runs only in the disposable upstream checkout. The generator expands each
 relative argument back to its original absolute path before sorting or reading.
@@ -32,6 +32,7 @@ CHANGES = {
         ),
     ),
 }
+ICU_SHA256 = "41bd03ef64dd84f6433edca3ede6835ad9aaf416434a2b9132d56666b348f74a"
 
 
 def changes_for(root):
@@ -50,18 +51,33 @@ def changes_for(root):
     return changes
 
 
+def fix_icu_script(original):
+    if hashlib.sha256(original).hexdigest() != ICU_SHA256:
+        raise ValueError("Unexpected upstream WebKit ICU script identity")
+    old = b"not $ICU_VERSION: removing it"
+    if original.count(old) != 1:
+        raise ValueError("Expected exactly one ICU PowerShell interpolation")
+    return original.replace(old, b"not ${ICU_VERSION}: removing it")
+
+
 def main():
     root = Path(sys.argv[1]).resolve(strict=True)
     workspace = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve(strict=True)
     runner_temp = Path(os.environ.get("RUNNER_TEMP", ".")).resolve(strict=True)
-    manifest = Path(sys.argv[2]).resolve()
+    webkit = Path(sys.argv[2]).resolve(strict=True)
+    manifest = Path(sys.argv[3]).resolve()
     if os.environ.get("GITHUB_ACTIONS") != "true" or root != workspace / "bun-source":
         raise ValueError("Adjustment requires the disposable Actions source checkout")
+    if webkit != workspace / "webkit-source":
+        raise ValueError("Adjustment requires the disposable Actions WebKit checkout")
     if manifest.parent != runner_temp:
         raise ValueError("Manifest must be in RUNNER_TEMP")
     if manifest.exists():
         raise ValueError("Refusing to overwrite build adjustment manifest")
     changes = changes_for(root)
+    icu_path = webkit / "build-icu.ps1"
+    icu_original = icu_path.read_bytes()
+    icu_adjusted = fix_icu_script(icu_original)
     manifest.write_text(
         json.dumps(
             {
@@ -70,6 +86,12 @@ def main():
                     "adjustedSha256": hashlib.sha256(adjusted).hexdigest(),
                 }
                 for name, (original, adjusted) in changes.items()
+            }
+            | {
+                "webkit/build-icu.ps1": {
+                    "originalSha256": hashlib.sha256(icu_original).hexdigest(),
+                    "adjustedSha256": hashlib.sha256(icu_adjusted).hexdigest(),
+                }
             },
             indent=2,
         )
@@ -77,6 +99,7 @@ def main():
     )
     for name, (_, adjusted) in changes.items():
         (root / name).write_bytes(adjusted)
+    icu_path.write_bytes(icu_adjusted)
 
 
 if __name__ == "__main__":

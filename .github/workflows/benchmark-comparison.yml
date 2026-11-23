@@ -116,9 +116,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows native tool provisioning failed' }
           rustup toolchain install nightly-2026-09-15 --profile minimal --component rust-src --component llvm-tools
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain install failed' }
-      - name: Preserve generator inputs while shortening Windows command lines
+      - name: Apply recorded upstream build-script adjustments
         run: |
-          python benchmarks/retention/shorten-upstream-build.py (Join-Path $env:GITHUB_WORKSPACE 'bun-source') (Join-Path $env:RUNNER_TEMP 'runtime-build-adjustments.json')
+          python benchmarks/retention/shorten-upstream-build.py (Join-Path $env:GITHUB_WORKSPACE 'bun-source') (Join-Path $env:GITHUB_WORKSPACE 'webkit-source') (Join-Path $env:RUNNER_TEMP 'runtime-build-adjustments.json')
           if ($LASTEXITCODE -ne 0) { throw 'Build adjustment failed' }
       - name: Build source runtime with adjusted codegen paths and release LTO
         run: |

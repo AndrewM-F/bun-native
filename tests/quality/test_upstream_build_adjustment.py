@@ -18,6 +18,17 @@ SPEC.loader.exec_module(ADJUST)
 
 
 class UpstreamBuildAdjustmentTests(unittest.TestCase):
+    def test_icu_fix_requires_the_expected_file_and_unique_interpolation(self):
+        original = b'Write-Host "not $ICU_VERSION: removing it"\n'
+        digest = hashlib.sha256(original).hexdigest()
+        with patch.object(ADJUST, "ICU_SHA256", digest):
+            self.assertEqual(
+                ADJUST.fix_icu_script(original),
+                b'Write-Host "not ${ICU_VERSION}: removing it"\n',
+            )
+            with self.assertRaises(ValueError):
+                ADJUST.fix_icu_script(original + b"unexpected")
+
     def test_rejects_changed_or_ambiguous_inputs_before_writing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
