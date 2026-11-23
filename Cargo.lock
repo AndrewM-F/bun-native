@@ -609,6 +609,7 @@ dependencies = [
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
  "x11rb",
+ "xim-ctext",
  "xkbcommon",
  "zbus",
 ]

@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import subprocess
+import tempfile
 from pathlib import Path
 
 REPOSITORY = "https://github.com/zed-industries/xim-rs"
@@ -16,7 +18,31 @@ def verify(package):
     if receipt["repository"] != REPOSITORY or receipt["commit"] != COMMIT:
         raise ValueError("unexpected XIM upstream identity")
     files = receipt["files"]
-    expected = set(files) | {"bun-native/upstream.json", "bun-native/README.md"}
+    patch_name = "ascii-designation.patch"
+    patches = receipt["patches"]
+    if receipt["patched"] != ["xim-ctext/src/lib.rs"] or set(patches) != {patch_name}:
+        raise ValueError("unexpected XIM patch inventory")
+    patch = package / "bun-native" / patch_name
+    if hashlib.sha256(patch.read_bytes()).hexdigest() != patches[patch_name]:
+        raise ValueError("XIM patch changed")
+    with tempfile.TemporaryDirectory(prefix="bun-native-xim-proof-") as directory:
+        root = Path(directory)
+        target = root / "xim-ctext/src/lib.rs"
+        target.parent.mkdir(parents=True)
+        target.write_bytes((package / "xim-ctext/src/lib.rs").read_bytes())
+        subprocess.run(
+            ["git", "apply", "--reverse", str(patch.resolve())],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+        original_ctext = target.read_bytes()
+    expected = set(files) | {
+        "bun-native/upstream.json",
+        "bun-native/README.md",
+        f"bun-native/{patch_name}",
+    }
     actual = set()
     for path in package.rglob("*"):
         if path.is_symlink():
@@ -26,7 +52,11 @@ def verify(package):
     if actual != expected:
         raise ValueError("XIM vendor inventory changed")
     for name, record in files.items():
-        data = (package / name).read_bytes()
+        data = (
+            original_ctext
+            if name == "xim-ctext/src/lib.rs"
+            else (package / name).read_bytes()
+        )
         if name == "Cargo.toml":
             if data.count(AFTER) != 1 or BEFORE in data:
                 raise ValueError("unexpected XIM dependency patch")

@@ -131,7 +131,9 @@
       "sha256": "c4c9945fc7b28a2606a7b52a39709316ded4c8b8320ab98d73a26ae9f41695b2"
     }
   },
-  "patched": [],
+  "patched": ["xim-ctext/src/lib.rs"],
   "added": [],
-  "patches": {}
+  "patches": {
+    "ascii-designation.patch": "4776715c6e55f997b81e0863c3b92d219a9ebb7f28e1843a1b6d94267a45159f"
+  }
 }

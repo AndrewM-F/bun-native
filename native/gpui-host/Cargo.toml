@@ -55,6 +55,7 @@ futures-lite = "=2.6.1"
 # The Wayland test's input peer (examples/wayland-input-peer.rs); the same
 # versions GPUI's Wayland backend already locks.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+xim-ctext = { path = "../vendor/xim-rs/xim-ctext" }
 wayland-client = "=0.31.15"
 wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
 wayland-protocols-misc = { version = "=0.3.12", features = ["client"] }

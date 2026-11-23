@@ -127,6 +127,11 @@ pub fn compound_text_to_utf8(bytes: &[u8]) -> Result<String, DecodeError> {
     for chunk in split {
         let mut iter = chunk.iter();
         match (iter.next(), iter.next()) {
+            // ESC ( B designates ASCII into G0; it is not text.
+            (Some(0x28), Some(0x42)) => {
+                let out = encoding_rs::mem::decode_latin1(iter.as_slice());
+                result.push_str(&out);
+            }
             // UTF-8
             (Some(0x25), Some(0x47)) => {
                 let left = iter.as_slice().to_vec();
@@ -286,6 +291,18 @@ mod tests {
             27, 36, 40, 66, 67, 78, 36, 67, 36, 70, 36, 107, 36, 68, 36, 98, 36, 106, 27, 40, 66,
         ];
         assert_eq!(crate::compound_text_to_utf8(COMP).unwrap(), UTF8);
+    }
+
+    #[test]
+    fn ascii_designation_preserves_following_text() {
+        assert_eq!(
+            crate::compound_text_to_utf8(b"before\x1b(Bafter").unwrap(),
+            "beforeafter"
+        );
+        assert_eq!(
+            crate::compound_text_to_utf8(b"\x1b(Bplain").unwrap(),
+            "plain"
+        );
     }
 
     #[test]

@@ -1,0 +1,33 @@
+--- a/xim-ctext/src/lib.rs
++++ b/xim-ctext/src/lib.rs
+@@ -127,6 +127,11 @@
+     for chunk in split {
+         let mut iter = chunk.iter();
+         match (iter.next(), iter.next()) {
++            // ESC ( B designates ASCII into G0; it is not text.
++            (Some(0x28), Some(0x42)) => {
++                let out = encoding_rs::mem::decode_latin1(iter.as_slice());
++                result.push_str(&out);
++            }
+             // UTF-8
+             (Some(0x25), Some(0x47)) => {
+                 let left = iter.as_slice().to_vec();
+@@ -289,6 +294,18 @@
+     }
+ 
+     #[test]
++    fn ascii_designation_preserves_following_text() {
++        assert_eq!(
++            crate::compound_text_to_utf8(b"before\x1b(Bafter").unwrap(),
++            "beforeafter"
++        );
++        assert_eq!(
++            crate::compound_text_to_utf8(b"\x1b(Bplain").unwrap(),
++            "plain"
++        );
++    }
++
++    #[test]
+     fn gb2312_cn() {
+         const UTF8: &str = "很高兴认识你";
+         const COMP: &[u8] = &[

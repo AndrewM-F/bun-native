@@ -15,7 +15,7 @@ class XimVendorTests(unittest.TestCase):
         self.assertGreater(VENDOR.verify(ROOT), 10)
 
     def test_unreviewed_source_or_manifest_edits_fail(self):
-        for name in ("src/x11rb.rs", "Cargo.toml"):
+        for name in ("src/x11rb.rs", "xim-ctext/src/lib.rs", "Cargo.toml"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
                 package = Path(temporary) / "xim-rs"
                 shutil.copytree(ROOT, package)
@@ -33,6 +33,15 @@ class XimVendorTests(unittest.TestCase):
                 manifest.read_text().replace('version = "0.14"', 'version = "0.15"')
             )
             with self.assertRaisesRegex(ValueError, "dependency patch"):
+                VENDOR.verify(package)
+
+    def test_changed_patch_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "xim-rs"
+            shutil.copytree(ROOT, package)
+            patch = package / "bun-native/ascii-designation.patch"
+            patch.write_text(patch.read_text() + "\n")
+            with self.assertRaisesRegex(ValueError, "patch changed"):
                 VENDOR.verify(package)
 
     def test_extra_file_fails(self):
