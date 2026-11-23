@@ -19,7 +19,9 @@
  *   or to VoiceOver.
  * - Windows: a portable NVDA with the silence synthesizer, logging every
  *   speech sequence it sends at the input/output log level. Keys come from
- *   SendInput in tests/native/windows-input-oracle.ps1.
+ *   SendInput in tests/native/windows-input-oracle.ps1. An optional independent
+ *   UI Automation tree snapshot records focused controls for diagnosis; it
+ *   does not replace the speech assertion or capture focus-change events.
  *
  * Every focus change is also read from public Bun focus events, so a phrase is
  * only accepted after the host actually moved focus. Linux asserts Orca's exact
@@ -56,6 +58,8 @@ const mac = platform === 'darwin'
 // macos-input-oracle. Windows: the absolute path of windows-input-oracle.ps1.
 const driver = linux ? process.env['BUN_NATIVE_ATSPI_PYTHON'] : process.env['BUN_NATIVE_SR_INPUT']
 const nvda = process.env['BUN_NATIVE_NVDA']
+// Optional independent Windows UI Automation focus snapshots for diagnosis.
+const uiaOracle = process.env['BUN_NATIVE_SR_UIA_ORACLE']
 // macOS: the compiled macos-accessibility-oracle.
 const axOracle = process.env['BUN_NATIVE_A11Y_ORACLE']
 if (
@@ -643,6 +647,7 @@ const steps: Array<{
   missing?: Expectation
   axFocus?: unknown
   axFocusInterval?: { startMs: number; endMs: number } | undefined
+  uiaFocus?: unknown
 }> = []
 // A step whose expected phrase never came is recorded and the scenario goes on,
 // so one run shows every step a screen reader misses; the run still fails.
@@ -811,6 +816,27 @@ try {
     const axFocus = mac && focus ? await checkAxFocus(label, focus) : undefined
     const axFocusInterval =
       axStart === undefined ? undefined : { startMs: axStart, endMs: performance.now() - started }
+    let uiaFocus: unknown
+    if (platform === 'win32' && focus && uiaOracle && isAbsolute(uiaOracle)) {
+      try {
+        const tree = JSON.parse(
+          await run([
+            'powershell.exe',
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            uiaOracle,
+            'dump',
+            TITLE,
+          ])
+        ) as Array<{ focused?: boolean; role?: string; name?: string }>
+        uiaFocus = { focused: tree.filter((entry) => entry.focused === true) }
+      } catch (error) {
+        uiaFocus = { error: String(error).slice(0, 500) }
+      }
+    }
     let spoken = true
     await waitFor(
       () => matches(reader.utterances().slice(from), expected),
@@ -824,9 +850,18 @@ try {
     })
     await Bun.sleep(settle)
     const phrases = reader.utterances().slice(from)
-    if (spoken) steps.push({ step: label, key, focus, phrases, axFocus, axFocusInterval })
+    if (spoken) steps.push({ step: label, key, focus, phrases, axFocus, axFocusInterval, uiaFocus })
     else {
-      steps.push({ step: label, key, focus, phrases, missing: expected, axFocus, axFocusInterval })
+      steps.push({
+        step: label,
+        key,
+        focus,
+        phrases,
+        missing: expected,
+        axFocus,
+        axFocusInterval,
+        uiaFocus,
+      })
       missed.push({ step: label, expected, phrases })
     }
     console.log(JSON.stringify({ step: label, phrases, spoken, ...(axFocus ? { axFocus } : {}) }))
