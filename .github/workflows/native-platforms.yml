@@ -1131,14 +1131,16 @@ jobs:
             if ($after.State -ne 'Installed') { throw "Korean language capability is $($after.State), not Installed" }
             # The hosted account can still list only en-US after the capability
             # is installed. Add Korean without removing its existing languages.
-            $languageSetup = '$list = Get-WinUserLanguageList; if ($list.LanguageTag -notcontains ''ko-KR'') { [void]$list.Add(''ko-KR''); Set-WinUserLanguageList $list -Force | Out-Null }; ConvertTo-Json -InputObject @((Get-WinUserLanguageList).LanguageTag) -Compress'
+            $languageSetup = '$list = Get-WinUserLanguageList; if (@($list.LanguageTag | Where-Object { $_ -eq ''ko'' -or $_ -like ''ko-*'' }).Count -eq 0) { [void]$list.Add(''ko-KR''); Set-WinUserLanguageList $list -Force | Out-Null }; ConvertTo-Json -InputObject @((Get-WinUserLanguageList).LanguageTag) -Compress'
             $languagePath = Join-Path $env:NATIVE_EVIDENCE 'windows-ime-languages-after.json'
             powershell.exe -NoProfile -NonInteractive -Command $languageSetup | Out-File $languagePath
             if ($LASTEXITCODE -ne 0) { throw 'Could not configure the hosted Korean user language' }
             $languageOutput = @(Get-Content $languagePath)
             if ($languageOutput.Count -eq 0) { throw 'Language setup produced no output' }
             $languagesAfter = @($languageOutput[-1] | ConvertFrom-Json)
-            if ($languagesAfter -notcontains 'ko-KR') { throw 'Korean is missing from the user language list' }
+            if (@($languagesAfter | Where-Object { $_ -eq 'ko' -or $_ -like 'ko-*' }).Count -eq 0) {
+              throw 'Korean is missing from the user language list'
+            }
             $env:BUN_NATIVE_IME_INPUT = (Resolve-Path 'tests/native/windows-input-oracle.ps1').Path
           }
           $package = Join-Path $env:NATIVE_EVIDENCE 'ime-platform-package'
