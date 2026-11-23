@@ -63,6 +63,16 @@ class ListenerRetentionControlTests(unittest.TestCase):
             raw["retentionObservation"] = {"stillReachable": []}
             self.assertFalse(CONTROL.shutdown_record_valid(raw, mode, True))
 
+    def test_first_observation_control_preserves_second_collection_and_assertion(self):
+        source = (ROOT / "benchmarks/solid/workload.ts").read_text()
+        baseline = CONTROL.first_observation_workload(source, False)
+        omitted = CONTROL.first_observation_workload(source, True)
+        self.assertEqual(baseline, source)
+        self.assertIn("const firstReachable: number[] = []", omitted)
+        self.assertIn("const stillReachable = probes.flatMap", omitted)
+        self.assertIn("if (stillReachable.length > 0)", omitted)
+        self.assertEqual(omitted.count("Bun.gc(true)"), source.count("Bun.gc(true)"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,8 @@ on:
       retention-diagnostic:
         description: Run the isolated Windows retention scan control only
         type: choice
-        options: ['none', 'narrow-scan', 'batch-release', 'listener', 'shutdown']
+        options:
+          ['none', 'narrow-scan', 'batch-release', 'listener', 'shutdown', 'first-observation']
         default: 'none'
       trials:
         description: Measured timed trials per artifact (3 to 30)
@@ -540,7 +541,7 @@ jobs:
 
   windows-listener-control:
     name: Windows listener retention control
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && (inputs.retention-diagnostic == 'listener' || inputs.retention-diagnostic == 'shutdown') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && (inputs.retention-diagnostic == 'listener' || inputs.retention-diagnostic == 'shutdown' || inputs.retention-diagnostic == 'first-observation') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 45
     defaults:
