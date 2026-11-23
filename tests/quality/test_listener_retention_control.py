@@ -48,6 +48,21 @@ class ListenerRetentionControlTests(unittest.TestCase):
             raw["retentionObservation"]["stillReachable"] = []
             self.assertFalse(CONTROL.listener_pin_valid(raw, mode))
 
+    def test_shutdown_pin_must_remain_observable_at_all_three_checkpoints(self):
+        for mode, index in (("development", 3), ("aot", 297)):
+            raw = {
+                "status": "failed",
+                "retentionObservation": {"stillReachable": [index]},
+                "beforeShutdownDiagnostic": [index],
+                "afterShutdownDiagnostic": [index],
+            }
+            self.assertTrue(CONTROL.shutdown_record_valid(raw, mode, True))
+            for checkpoint in ("beforeShutdownDiagnostic", "afterShutdownDiagnostic"):
+                broken = {**raw, checkpoint: []}
+                self.assertFalse(CONTROL.shutdown_record_valid(broken, mode, True))
+            raw["retentionObservation"] = {"stillReachable": []}
+            self.assertFalse(CONTROL.shutdown_record_valid(raw, mode, True))
+
 
 if __name__ == "__main__":
     unittest.main()

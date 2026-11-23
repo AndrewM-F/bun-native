@@ -12,6 +12,8 @@ A failure snapshot from [the benchmark run](https://github.com/AndrewM-F/bun-nat
 
 The retaining root remains unresolved. Further work must distinguish an application or React owner from hidden or conservative runtime roots at the actual collection checkpoint, and qualify any candidate against real native interaction and paired performance before merging it.
 
+The next headless control is predeclared to run three alternating baseline and globally pinned-root trials per execution mode on the callback-release candidate. After the unchanged benchmark checkpoints have failed, it records one additional collection immediately before application shutdown and another after shutdown. The pin must remain visible at all three observations. A target disappearing only after shutdown would warrant further investigation of shutdown-related ownership, but the additional collection itself can change reachability; this control cannot establish causation or turn the original failure into a pass.
+
 ## Runtime source provenance for the next trace
 
 The older [root-tracing investigation](root-tracing.md) used Bun `da867c60b` and WebKit `8c6c963e3c49fe39942d9625d1fc924128fad26e`; it is historical evidence, not an observation from this Windows runtime. The Windows benchmark uses Bun `b1007f1177fd402fae67387b8548cae5ae9b5707`, whose [build configuration](https://github.com/oven-sh/bun/blob/b1007f1177fd402fae67387b8548cae5ae9b5707/scripts/build/deps/webkit.ts) pins WebKit `4d45755fed4aeef19e95beb90d3d0c884a2812bd`. An instrumented build must match that newer source and its Windows release configuration before its observations can be compared with the failing workload.
