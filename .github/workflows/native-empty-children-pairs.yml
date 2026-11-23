@@ -53,7 +53,7 @@ jobs:
           $baseline = (git -C .baseline rev-parse HEAD).Trim()
           $candidate = (git rev-parse HEAD).Trim()
           if ($baseline -ne 'a85fa5c9b59993aa9ecd472e7e9152c5c7f8d10c' -or $candidate -ne $env:GITHUB_SHA) { throw 'Unexpected source identity' }
-          $allowed = @('.github/workflows/native-empty-children-pairs.yml', 'benchmarks/empty-children-pairs.py', 'native/protocol/examples/empty_children_perf.rs', 'native/protocol/src/tree.rs', 'native/protocol/src/tree/nodes/tests.rs', 'native/protocol/src/tree/tests.rs', 'tests/quality/ci-event-coverage.test.ts', 'tests/quality/test_empty_children_pairs.py')
+          $allowed = @('.github/workflows/native-empty-children-pairs.yml', 'benchmarks/empty-children-pairs.py', 'benchmarks/empty-children-host-pairs.py', 'benchmarks/bridge.ts', 'native/protocol/examples/empty_children_perf.rs', 'native/protocol/src/tree.rs', 'native/protocol/src/tree/nodes/tests.rs', 'native/protocol/src/tree/tests.rs', 'tests/quality/ci-event-coverage.test.ts', 'tests/quality/test_empty_children_pairs.py', 'tests/quality/test_empty_children_host_pairs.py')
           $changed = @(git diff --name-only $baseline $candidate)
           if ($LASTEXITCODE -ne 0 -or @($changed | Where-Object { $_ -notin $allowed }).Count -ne 0) { throw "Candidate contains unrelated source changes: $($changed -join ', ')" }
           if ((Get-FileHash rust-toolchain.toml).Hash -ne (Get-FileHash .baseline/rust-toolchain.toml).Hash) { throw 'Rust toolchain pins differ' }
@@ -79,5 +79,90 @@ jobs:
         with:
           name: empty-children-pairs-${{ runner.os }}-${{ runner.arch }}
           path: ${{ runner.temp }}/empty-children-pairs/
+          if-no-files-found: warn
+          retention-days: 30
+
+  native-host-pairs:
+    name: Native host mount pairs (Linux)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Checkout pinned baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: a85fa5c9b59993aa9ecd472e7e9152c5c7f8d10c
+          path: .baseline
+          persist-credentials: false
+      - name: Check source identities and match the measured client
+        run: |
+          set -euo pipefail
+          base=a85fa5c9b59993aa9ecd472e7e9152c5c7f8d10c
+          test "$(git -C .baseline rev-parse HEAD)" = "$base"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --name-only "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/host-pair-changed.txt"
+          python3 - <<'PY2'
+          from pathlib import Path
+          import os
+          allowed = {'.github/workflows/native-empty-children-pairs.yml', 'benchmarks/empty-children-pairs.py', 'benchmarks/empty-children-host-pairs.py', 'benchmarks/bridge.ts', 'native/protocol/examples/empty_children_perf.rs', 'native/protocol/src/tree.rs', 'native/protocol/src/tree/nodes/tests.rs', 'native/protocol/src/tree/tests.rs', 'tests/quality/ci-event-coverage.test.ts', 'tests/quality/test_empty_children_pairs.py', 'tests/quality/test_empty_children_host_pairs.py'}
+          changed = set((Path(os.environ['RUNNER_TEMP']) / 'host-pair-changed.txt').read_text().splitlines())
+          if not changed or changed - allowed:
+              raise SystemExit(f'Unexpected source changes: {sorted(changed - allowed)}')
+          PY2
+          cmp rust-toolchain.toml .baseline/rust-toolchain.toml
+          cp benchmarks/bridge.ts .baseline/benchmarks/bridge.ts
+          cmp benchmarks/bridge.ts .baseline/benchmarks/bridge.ts
+      - name: Install native prerequisites
+        timeout-minutes: 25
+        uses: ./.github/actions/linux-native-prerequisites
+      - name: Build each release host and its inspected AOT client
+        timeout-minutes: 60
+        run: |
+          set -euo pipefail
+          for variant in base candidate; do
+            if [[ "$variant" == base ]]; then source_dir="$GITHUB_WORKSPACE/.baseline"; else source_dir="$GITHUB_WORKSPACE"; fi
+            target="$RUNNER_TEMP/host-pairs-$variant-target"
+            package="$RUNNER_TEMP/host-pairs-$variant-aot"
+            (cd "$source_dir"; bun install --frozen-lockfile --ignore-scripts; CARGO_TARGET_DIR="$target" cargo build --locked --release -p bun-native-host --bin bun-native-host)
+            (cd "$source_dir"; bun experiments/aot-gpui/build-window.ts --source "$source_dir" --host "$target/release/bun-native-host" --host-profile release --entry bridge --outdir "$package")
+          done
+      - name: Collect native development and inspected AOT pairs
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          bash scripts/quality/native-x11-session.sh "$RUNNER_TEMP/empty-host-session" -- \
+            python3 benchmarks/empty-children-host-pairs.py \
+              --base-source "$GITHUB_WORKSPACE/.baseline" --candidate-source "$GITHUB_WORKSPACE" \
+              --base-host "$RUNNER_TEMP/host-pairs-base-target/release/bun-native-host" \
+              --candidate-host "$RUNNER_TEMP/host-pairs-candidate-target/release/bun-native-host" \
+              --base-aot "$RUNNER_TEMP/host-pairs-base-aot" --candidate-aot "$RUNNER_TEMP/host-pairs-candidate-aot" \
+              --bun "$(command -v bun)" --base-commit a85fa5c9b59993aa9ecd472e7e9152c5c7f8d10c \
+              --candidate-commit "$GITHUB_SHA" --output "$RUNNER_TEMP/empty-host-pairs"
+      - name: Retain native observations and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: empty-children-native-host-Linux-X64
+          path: |
+            ${{ runner.temp }}/empty-host-pairs/
+            ${{ runner.temp }}/empty-host-session/
+            ${{ runner.temp }}/host-pair-changed.txt
+            ${{ runner.temp }}/host-pairs-base-aot/manifest.json
+            ${{ runner.temp }}/host-pairs-candidate-aot/manifest.json
+            !${{ runner.temp }}/empty-host-session/runtime/
           if-no-files-found: warn
           retention-days: 30

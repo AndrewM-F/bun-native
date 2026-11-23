@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Run fresh-process A/A and AB/BA protocol preparation controls."""
 
 import argparse
@@ -21,7 +20,9 @@ def digest(path):
 
 
 def measure(path):
-    process = subprocess.run([str(path)], capture_output=True, text=True, timeout=180)
+    process = subprocess.run(
+        [str(path)], capture_output=True, text=True, timeout=180, check=False
+    )
     rows = [json.loads(line) for line in process.stdout.splitlines()]
     expected = {
         (shape, size) for shape in ("flat", "grouped") for size in (1, 16, 128, 1024)

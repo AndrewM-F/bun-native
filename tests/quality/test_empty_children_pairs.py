@@ -2,10 +2,10 @@
 
 import importlib.util
 import json
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
+from unittest.mock import patch
 
 MODULE_PATH = Path(__file__).resolve().parents[2] / "benchmarks/empty-children-pairs.py"
 SPEC = importlib.util.spec_from_file_location("empty_children_pairs", MODULE_PATH)
@@ -39,31 +39,34 @@ def valid_rows():
     return rows
 
 
-def test_rejects_missing_duplicate_and_wrong_workload(monkeypatch):
-    rows = valid_rows()
-    process = SimpleNamespace(returncode=0, stdout="", stderr="")
-    monkeypatch.setattr(pairs.subprocess, "run", lambda *args, **kwargs: process)
-    for invalid in (
-        rows[:-1],
-        rows[:-1] + [rows[0]],
-        [{**rows[0], "iterations": 2}] + rows[1:],
-    ):
-        process.stdout = "\n".join(json.dumps(row) for row in invalid)
-        with pytest.raises(ValueError):
-            pairs.measure(Path("unused"))
-    process.stdout = "\n".join(json.dumps(row) for row in reversed(rows))
-    assert len(pairs.measure(Path("unused"))) == 11
-    process.returncode = 1
-    with pytest.raises(ValueError):
-        pairs.measure(Path("unused"))
+class EmptyChildrenPairsTests(unittest.TestCase):
+    def test_rejects_missing_duplicate_and_wrong_workload(self):
+        rows = valid_rows()
+        process = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch.object(pairs.subprocess, "run", return_value=process):
+            for invalid in (
+                rows[:-1],
+                rows[:-1] + [rows[0]],
+                [{**rows[0], "iterations": 2}] + rows[1:],
+            ):
+                process.stdout = "\n".join(json.dumps(row) for row in invalid)
+                with self.assertRaises(ValueError):
+                    pairs.measure(Path("unused"))
+            process.stdout = "\n".join(json.dumps(row) for row in reversed(rows))
+            self.assertEqual(len(pairs.measure(Path("unused"))), 11)
+            process.returncode = 1
+            with self.assertRaises(ValueError):
+                pairs.measure(Path("unused"))
 
-
-def test_summary_preserves_ratios_and_fixed_seed():
-    base = valid_rows()
-    candidate = [{**row, "elapsed_ns": 80} for row in base]
-    samples = [{"base": base, "candidate": candidate} for _ in range(5)]
-    result = pairs.summarize(samples)
-    assert result == pairs.summarize(samples)
-    assert all(
-        row["median_ratio"] == 0.8 and row["candidate_wins"] == 5 for row in result
-    )
+    def test_summary_preserves_ratios_and_fixed_seed(self):
+        base = valid_rows()
+        candidate = [{**row, "elapsed_ns": 80} for row in base]
+        samples = [{"base": base, "candidate": candidate} for _ in range(5)]
+        result = pairs.summarize(samples)
+        self.assertEqual(result, pairs.summarize(samples))
+        self.assertTrue(
+            all(
+                row["median_ratio"] == 0.8 and row["candidate_wins"] == 5
+                for row in result
+            )
+        )

@@ -227,6 +227,7 @@ const result: RecordValue = {
 }
 const individual: number[] = []
 const batched: number[] = []
+const mounts: number[] = []
 function distribution(samples: number[]) {
   const sorted = [...samples].sort((a, b) => a - b)
   const percentile = (fraction: number) => sorted[Math.ceil(sorted.length * fraction) - 1] ?? null
@@ -421,7 +422,9 @@ try {
         },
         { type: 'insert', parent_id: 1, child_id: first + offset + index, index: offset + index }
       )
+    const now = performance.now()
     await batch(operations)
+    mounts.push(performance.now() - now)
   }
   await Bun.sleep(150)
   for (let index = 0; index < 20; index++)
@@ -495,6 +498,7 @@ try {
   result['nativeEventCount'] = orderedEventCount
   result['individual'] = distribution(individual)
   result['batchesOf100'] = distribution(batched)
+  result['mountBatches'] = distribution(mounts)
   if (failure) {
     result['status'] = 'failed'
     result['error'] = String(failure)
