@@ -1055,6 +1055,7 @@ jobs:
             if (-not (Test-Path -LiteralPath $env:BUN_NATIVE_NVDA)) { throw 'nvda_noUIAccess.exe is not in the NVDA launcher' }
             $env:BUN_NATIVE_SR_INPUT = (Resolve-Path 'tests/native/windows-input-oracle.ps1').Path
             $env:BUN_NATIVE_SR_UIA_ORACLE = (Resolve-Path 'tests/native/windows-accessibility-oracle.ps1').Path
+            $env:BUN_NATIVE_SR_UIA_EVENTS = (Resolve-Path 'tests/native/windows-uia-focus-events.ps1').Path
             [ordered]@{ version = '2024.4.2'; sha256 = $hash; signer = $signature.SignerCertificate.Subject } |
               ConvertTo-Json | Out-File (Join-Path $env:NATIVE_EVIDENCE 'nvda-download.json')
           }
