@@ -16,11 +16,13 @@ $version = & $clang --version
 if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch 'clang version 23\.1\.1') {
   throw 'The control requires LLVM 23.1.1'
 }
+& rustc --version --verbose *> (Join-Path $root 'rust-version.txt')
+if ($LASTEXITCODE -ne 0) { throw 'The Rust compiler is required for archive controls' }
 $records = [Collections.Generic.List[object]]::new()
 foreach ($linkage in @('weak', 'strong')) {
   foreach ($lto in @('off', 'on')) {
    foreach ($definitionLto in @('off', 'on')) {
-    foreach ($placement in @('object', 'archive', 'none')) {
+    foreach ($placement in @('object', 'archive', 'none', 'rust-archive', 'rust-forced')) {
     $directory = Join-Path $root "$linkage-$lto-definition-$definitionLto-$placement"
     New-Item -ItemType Directory -Path $directory | Out-Null
     $attribute = if ($linkage -eq 'weak') { '__attribute__((weak)) ' } else { '' }
@@ -48,9 +50,19 @@ foreach ($linkage in @('weak', 'strong')) {
       $objects = @($objects[0], $objects[1], $archive)
     } elseif ($placement -eq 'none') {
       $objects = @($objects[0], $objects[1])
+    } elseif ($placement -in @('rust-archive', 'rust-forced')) {
+      $rustSource = Join-Path $directory 'timer.rs'
+      [IO.File]::WriteAllText($rustSource, '#![no_std]' + "`n" + '#[no_mangle] pub extern "C" fn WTFTimer__update(_x: i32) {}' + "`n")
+      $rustArgs = @('--crate-name', 'timer', '--crate-type', 'rlib', '-C', 'opt-level=2', '--out-dir', $directory, $rustSource)
+      if ($definitionLto -eq 'on') { $rustArgs += @('-C', 'linker-plugin-lto') }
+      & rustc @rustArgs *> (Join-Path $directory 'rust-compile.log')
+      if ($LASTEXITCODE -ne 0) { throw 'Rust archive control failed to compile' }
+      $objects = @($objects[0], $objects[1], (Join-Path $directory 'libtimer.rlib'))
     }
     $dll = Join-Path $directory 'control.dll'
-    & $linker /dll /noentry /nodefaultlib /opt:noref /LTCG /opt:lldlto=2 /opt:lldltocgo=2 "/out:$dll" @objects *> (Join-Path $directory 'link.log')
+    $linkArgs = @('/dll', '/noentry', '/nodefaultlib', '/opt:noref', '/LTCG', '/opt:lldlto=2', '/opt:lldltocgo=2', "/out:$dll")
+    if ($placement -eq 'rust-forced') { $linkArgs += '/include:WTFTimer__update' }
+    & $linker @linkArgs @objects *> (Join-Path $directory 'link.log')
     $linkExit = $LASTEXITCODE
     $records.Add([pscustomobject]@{
       linkage = $linkage
