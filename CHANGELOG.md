@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.3](https://github.com/AndrewM-F/bun-native/compare/v0.37.2...v0.37.3) (2026-11-23)
+
+
+### Tests
+
+* **native:** preserve filesystem and drag failure evidence ([#754](https://github.com/AndrewM-F/bun-native/issues/754)) ([a5c0644](https://github.com/AndrewM-F/bun-native/commit/a5c0644f7c6b023c62fe6abff42323db5885ccf3))
+
 ## [0.37.2](https://github.com/AndrewM-F/bun-native/compare/v0.37.1...v0.37.2) (2026-11-22)
 
 
