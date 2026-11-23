@@ -816,8 +816,24 @@ try {
     const axFocus = mac && focus ? await checkAxFocus(label, focus) : undefined
     const axFocusInterval =
       axStart === undefined ? undefined : { startMs: axStart, endMs: performance.now() - started }
+    let spoken = true
+    await waitFor(
+      () => matches(reader.utterances().slice(from), expected),
+      `${label}: ${reader.name} speech ${JSON.stringify(expected)}`,
+      15_000,
+      () => JSON.stringify(reader.utterances().slice(from))
+    ).catch((error: unknown) => {
+      if (!(error instanceof Error) || !error.message.startsWith('Timed out')) throw error
+      console.error(error.message)
+      spoken = false
+    })
+    await Bun.sleep(settle)
+    const phrases = reader.utterances().slice(from)
+    // Capture only after the speech deadline and settle, so this diagnostic
+    // cannot extend the existing window for a phrase to pass.
     let uiaFocus: unknown
     if (platform === 'win32' && focus && uiaOracle && isAbsolute(uiaOracle)) {
+      const startMs = performance.now() - started
       try {
         const tree = JSON.parse(
           await run([
@@ -832,24 +848,19 @@ try {
             TITLE,
           ])
         ) as Array<{ focused?: boolean; role?: string; name?: string }>
-        uiaFocus = { focused: tree.filter((entry) => entry.focused === true) }
+        uiaFocus = {
+          startMs,
+          endMs: performance.now() - started,
+          focused: tree.filter((entry) => entry.focused === true),
+        }
       } catch (error) {
-        uiaFocus = { error: String(error).slice(0, 500) }
+        uiaFocus = {
+          startMs,
+          endMs: performance.now() - started,
+          error: String(error).slice(0, 500),
+        }
       }
     }
-    let spoken = true
-    await waitFor(
-      () => matches(reader.utterances().slice(from), expected),
-      `${label}: ${reader.name} speech ${JSON.stringify(expected)}`,
-      15_000,
-      () => JSON.stringify(reader.utterances().slice(from))
-    ).catch((error: unknown) => {
-      if (!(error instanceof Error) || !error.message.startsWith('Timed out')) throw error
-      console.error(error.message)
-      spoken = false
-    })
-    await Bun.sleep(settle)
-    const phrases = reader.utterances().slice(from)
     if (spoken) steps.push({ step: label, key, focus, phrases, axFocus, axFocusInterval, uiaFocus })
     else {
       steps.push({
