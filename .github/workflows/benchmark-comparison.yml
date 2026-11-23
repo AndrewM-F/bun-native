@@ -476,8 +476,10 @@ jobs:
           export PATH="$RUNNER_TEMP/llvm/bin:$PATH"
           for tool in clang clang-cl lld-link llvm-lib llvm-rc; do
             command -v "$tool"
-            "$tool" --version | head -n 1
           done
+          clang --version | head -n 1
+          clang-cl --version | head -n 1
+          lld-link --version
           nasm --version
           rustup run nightly-2026-09-15 rustc --version --verbose
           rustup target list --toolchain nightly-2026-09-15 --installed
