@@ -27,6 +27,7 @@ import {
 } from 'node:fs'
 import { release, tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
+import { windowsFiletimeEvidence } from './windows-filetime.ts'
 
 const output = process.env['BUN_NATIVE_FILESYSTEM_EVIDENCE']
 const executable = process.env['BUN_NATIVE_HOST']
@@ -161,6 +162,10 @@ async function readWrite(grant: NativeFileGrant) {
     release: release(),
     operation: 'write truncate',
     mode,
+    rawWindowsFiletimeTicks:
+      windows && Math.abs(stat.modifiedMs - bunStat.mtimeMs) >= 1
+        ? windowsFiletimeEvidence(join(work, 'notes.txt'))
+        : null,
   }
   assert.equal(
     Math.abs(modification.deltaMs) < 1,
