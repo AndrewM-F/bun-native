@@ -3,6 +3,7 @@ mod command_receive;
 mod evidence;
 #[cfg(any(target_os = "macos", test))]
 mod frame_pacing;
+mod host_startup;
 mod input;
 mod phases;
 mod services;
@@ -23,6 +24,7 @@ const COMMAND_TIME_BUDGET: Duration = Duration::from_millis(4);
 const COMMAND_YIELD_DELAY: Duration = Duration::from_millis(1);
 
 fn main() {
+    let mut host_startup = host_startup::HostStartup::from_environment();
     #[cfg(windows)]
     if let Some(code) = services::console_interrupt_helper(std::env::args_os().skip(1)) {
         std::process::exit(code);
@@ -34,18 +36,34 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if let Some(trace) = &mut host_startup {
+        trace.point(0);
+    }
     startup_log::install_from_environment();
     phases::install_from_environment();
     let (commands, events) = channel::connect();
     let evidence = evidence::Evidence::from_environment();
+    if let Some(trace) = &mut host_startup {
+        trace.point(1);
+    }
     #[cfg(target_os = "macos")]
     frame_pacing::configure();
-    gpui_platform::application()
+    let application = gpui_platform::application();
+    if let Some(trace) = &mut host_startup {
+        trace.point(2);
+    }
+    application
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx: &mut App| {
+            if let Some(trace) = &mut host_startup {
+                trace.point(3);
+            }
             input::bind_keys(cx);
             view::bind_keys(cx);
             let mut session = Session::new(events, evidence, policy, cx);
+            if let Some(trace) = &mut host_startup {
+                trace.point(4);
+            }
             cx.spawn(async move |cx| {
                 let executor = cx.background_executor().clone();
                 let mut turn_started = executor.now();
@@ -62,6 +80,9 @@ fn main() {
                         turn_started = executor.now();
                         commands_in_turn = 0;
                     }
+                    if let Some(trace) = &mut host_startup {
+                        trace.point(5);
+                    }
                     cx.update(|cx| match incoming {
                         Incoming::Command(command) => session.dispatch(command, cx),
                         Incoming::InvalidFrame => session.finish(
@@ -74,6 +95,10 @@ fn main() {
                         ),
                         Incoming::Disconnected => session.disconnect(cx),
                     });
+                    if let Some(mut trace) = host_startup.take() {
+                        trace.point(6);
+                        trace.write();
+                    }
                     if session.finishing() {
                         break;
                     }
