@@ -21,6 +21,7 @@ on:
             'runtime-preflight',
             'runtime-cross-preflight',
             'runtime-cross-tools',
+            'runtime-cross-build',
             'runtime-build',
             'runtime-compare',
             'runtime-link-control',
@@ -455,9 +456,80 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  linux-runtime-cross-build:
+    name: Cross-build diagnostic Windows runtime
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-build' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: oven-sh/bun
+          ref: b1007f1177fd402fae67387b8548cae5ae9b5707
+          path: bun-source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: oven-sh/WebKit
+          ref: 4d45755fed4aeef19e95beb90d3d0c884a2812bd
+          path: webkit-source
+          sparse-checkout: |
+            Source
+            Tools
+            icu
+          persist-credentials: false
+      - name: Install pinned cross-build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/llvm-23.1.1.tar.xz"
+          curl --fail --location --retry 3 --output "$archive" https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-Linux-X64.tar.xz
+          printf '%s  %s\n' '832aeb58d105de1cabc7b982dd2c65de0610f7377df48ae8fc2dd8e97420a15c' "$archive" | sha256sum --check
+          mkdir "$RUNNER_TEMP/llvm"
+          tar -xJf "$archive" -C "$RUNNER_TEMP/llvm" --strip-components=1
+          echo "$RUNNER_TEMP/llvm/bin" >> "$GITHUB_PATH"
+          sudo apt-get update
+          sudo apt-get install -y nasm
+          rustup toolchain install nightly-2026-09-15 --profile minimal --component rust-src --component llvm-tools --target x86_64-pc-windows-msvc
+      - name: Build pinned Windows runtime from Linux
+        shell: bash
+        env:
+          BUN_WEBKIT_PATH: ${{ github.workspace }}/webkit-source
+          RUSTUP_TOOLCHAIN: nightly-2026-09-15
+          BUILDKITE_COMMIT: b1007f1177fd402fae67387b8548cae5ae9b5707
+          GIT_SHA: b1007f1177fd402fae67387b8548cae5ae9b5707
+        run: |
+          set -euo pipefail
+          export GITHUB_SHA="$BUILDKITE_COMMIT"
+          test "$(git -C bun-source rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C webkit-source rev-parse HEAD)" = 4d45755fed4aeef19e95beb90d3d0c884a2812bd
+          cd bun-source
+          bun install --frozen-lockfile
+          # On CI, the pinned Bun build fetches the Microsoft SDK/MSVC sysroot
+          # with xwin --accept-license when no complete sysroot is present.
+          bun scripts/build.ts --profile=release-local --lto=on --trimmable=on --os=windows --arch=x64 --build-dir=build/release-cross-windows
+          test -f build/release-cross-windows/bun.exe
+          sha256sum build/release-cross-windows/bun.exe > "$RUNNER_TEMP/cross-runtime-sha256.txt"
+      - name: Retain diagnostic runtime and identity
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-cross-source-runtime
+          path: |
+            bun-source/build/release-cross-windows/bun.exe
+            ${{ runner.temp }}/cross-runtime-sha256.txt
+          if-no-files-found: warn
+          retention-days: 7
+
   linux-runtime-cross-tools:
     name: Verify Linux Windows cross-build tools
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-tools'
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-tools' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -487,7 +559,7 @@ jobs:
 
   linux-runtime-cross-preflight:
     name: Linux Windows cross-build preflight
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-preflight'
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
