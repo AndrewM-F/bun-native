@@ -1,0 +1,83 @@
+name: Native empty-child storage pairs
+
+# Diagnostic only: the two source trees differ in protocol storage, and both
+# execute the exact same benchmark source. This does not measure a native UI.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize]
+    paths:
+      - .github/workflows/native-empty-children-pairs.yml
+      - benchmarks/empty-children-pairs.py
+      - native/protocol/examples/empty_children_perf.rs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-empty-children-pairs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pairs:
+    name: Protocol preparation pairs (${{ matrix.os }})
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Checkout pinned baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: a85fa5c9b59993aa9ecd472e7e9152c5c7f8d10c
+          path: .baseline
+          persist-credentials: false
+      - name: Build matching release fixtures
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $baseline = (git -C .baseline rev-parse HEAD).Trim()
+          $candidate = (git rev-parse HEAD).Trim()
+          if ($baseline -ne 'a85fa5c9b59993aa9ecd472e7e9152c5c7f8d10c' -or $candidate -ne $env:GITHUB_SHA) { throw 'Unexpected source identity' }
+          $allowed = @('.github/workflows/native-empty-children-pairs.yml', 'benchmarks/empty-children-pairs.py', 'native/protocol/examples/empty_children_perf.rs', 'native/protocol/src/tree.rs', 'native/protocol/src/tree/nodes/tests.rs', 'native/protocol/src/tree/tests.rs', 'tests/quality/ci-event-coverage.test.ts', 'tests/quality/test_empty_children_pairs.py')
+          $changed = @(git diff --name-only $baseline $candidate)
+          if ($LASTEXITCODE -ne 0 -or @($changed | Where-Object { $_ -notin $allowed }).Count -ne 0) { throw "Candidate contains unrelated source changes: $($changed -join ', ')" }
+          if ((Get-FileHash rust-toolchain.toml).Hash -ne (Get-FileHash .baseline/rust-toolchain.toml).Hash) { throw 'Rust toolchain pins differ' }
+          Copy-Item native/protocol/examples/empty_children_perf.rs .baseline/native/protocol/examples/empty_children_perf.rs
+          if ((Get-FileHash native/protocol/examples/empty_children_perf.rs).Hash -ne (Get-FileHash .baseline/native/protocol/examples/empty_children_perf.rs).Hash) { throw 'Benchmark sources differ' }
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'empty-base-target'
+          Push-Location .baseline
+          try { cargo build --locked --release -p bun-native-protocol --example empty_children_perf; if ($LASTEXITCODE -ne 0) { throw 'Baseline build failed' } } finally { Pop-Location }
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'empty-candidate-target'
+          cargo build --locked --release -p bun-native-protocol --example empty_children_perf
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate build failed' }
+      - name: Collect alternating pairs and A/A controls
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $suffix = if ($IsWindows) { '.exe' } else { '' }
+          $base = Join-Path $env:RUNNER_TEMP "empty-base-target/release/examples/empty_children_perf$suffix"
+          $candidate = Join-Path $env:RUNNER_TEMP "empty-candidate-target/release/examples/empty_children_perf$suffix"
+          python benchmarks/empty-children-pairs.py --baseline $base --candidate $candidate --baseline-source a85fa5c9b59993aa9ecd472e7e9152c5c7f8d10c --candidate-source $env:GITHUB_SHA --output (Join-Path $env:RUNNER_TEMP 'empty-children-pairs') --pairs 20 --aa-pairs 10
+          if ($LASTEXITCODE -ne 0) { throw 'Paired measurement failed' }
+      - name: Retain all observations
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: empty-children-pairs-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/empty-children-pairs/
+          if-no-files-found: warn
+          retention-days: 30

@@ -52,6 +52,7 @@ const readyOnlyWorkflows = [
   '.github/workflows/opencode-security.yml',
   '.github/workflows/benchmark-comparison.yml',
   '.github/workflows/native-bridge-pairs.yml',
+  '.github/workflows/native-empty-children-pairs.yml',
 ] as const
 
 for (const path of readyOnlyWorkflows) {
