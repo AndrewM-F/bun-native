@@ -82,12 +82,20 @@ jobs:
         with:
           rust: 'false'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
         with:
           repository: oven-sh/bun
           ref: b1007f1177fd402fae67387b8548cae5ae9b5707
           path: bun-source
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
         with:
           repository: oven-sh/WebKit
           ref: 4d45755fed4aeef19e95beb90d3d0c884a2812bd
@@ -127,6 +135,8 @@ jobs:
           rustc --version --verbose
           git -C $env:BUN_WEBKIT_PATH rev-parse HEAD
           git rev-parse HEAD
+          $aotSources = Join-Path $env:BUN_WEBKIT_PATH 'Source/JavaScriptCore/aot/Sources.txt'
+          if ([Array]::IndexOf([IO.File]::ReadAllBytes($aotSources), [byte]13) -ge 0) { throw 'WebKit AOT source list contains CRLF' }
           bun install --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { throw 'Bun source dependency install failed' }
           bun scripts/build.ts --profile=release-local --lto=on --build-dir=build/release-local
