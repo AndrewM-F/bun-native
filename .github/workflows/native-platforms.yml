@@ -43,6 +43,10 @@ on:
         description: Disable NVDA enhanced event processing in the debug run only
         type: boolean
         default: false
+      nvda-cache-control:
+        description: Register the independent focus observer with NVDA-like cached properties
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1029,6 +1033,7 @@ jobs:
         env:
           BUN_NATIVE_NVDA_EVENT_DEBUG: ${{ github.event_name == 'workflow_dispatch' && inputs.nvda-debug && 'true' || 'false' }}
           BUN_NATIVE_NVDA_DISABLE_ENHANCED: ${{ github.event_name == 'workflow_dispatch' && inputs.nvda-debug && inputs.nvda-disable-enhanced && 'true' || 'false' }}
+          BUN_NATIVE_UIA_CACHE_CONTROL: ${{ github.event_name == 'workflow_dispatch' && inputs.nvda-debug && inputs.nvda-cache-control && 'true' || 'false' }}
         run: |
           if ($IsMacOS) {
             bash scripts/quality/macos-voiceover-setup.sh (Join-Path $env:NATIVE_EVIDENCE 'voiceover-setup')
