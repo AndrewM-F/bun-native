@@ -2,10 +2,39 @@
 
 import hashlib
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class NestedVendorInputs(unittest.TestCase):
+    def test_nested_crate_build_inputs_are_included(self):
+        from scripts.quality.native_harness.common import vendor_source_paths
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            names = [
+                "native/vendor/project/Cargo.toml",
+                "native/vendor/project/src/lib.rs",
+                "native/vendor/project/parser/Cargo.toml",
+                "native/vendor/project/parser/build.rs",
+                "native/vendor/project/parser/spec.yaml",
+                "native/vendor/project/parser/src/lib.rs",
+                "native/vendor/project/parser/res/snippet.rs",
+            ]
+            for name in names:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture")
+            self.assertEqual(
+                {
+                    path.relative_to(root).as_posix()
+                    for path in vendor_source_paths(root)
+                },
+                set(names),
+            )
 
 
 @unittest.skipUnless(sys.platform == "linux", "Linux evidence source snapshots")
@@ -18,9 +47,23 @@ class NativeVendorInputs(unittest.TestCase):
             for name in ("Cargo.toml", "build.rs"):
                 if (path := package / name).is_file():
                     expected.add(path)
-            expected.update(
-                path for path in (package / "src").rglob("*") if path.is_file()
-            )
+            for directory in ("src", "res"):
+                expected.update(
+                    path for path in (package / directory).rglob("*") if path.is_file()
+                )
+            for child in package.iterdir():
+                if not child.is_dir() or not (child / "Cargo.toml").is_file():
+                    continue
+                expected.add(child / "Cargo.toml")
+                if (child / "build.rs").is_file():
+                    expected.add(child / "build.rs")
+                expected.update(path for path in child.glob("*.yaml") if path.is_file())
+                for directory in ("src", "res"):
+                    expected.update(
+                        path
+                        for path in (child / directory).rglob("*")
+                        if path.is_file()
+                    )
         self.assertIn(ROOT / "native/vendor/wgpu-hal/build.rs", expected)
         self.assertIn(
             ROOT / "native/vendor/wgpu-hal/src/gles/shaders/clear.frag", expected

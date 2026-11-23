@@ -13,6 +13,25 @@ def harness_sources():
     return sorted(path.relative_to(ROOT).as_posix() for path in PACKAGE.glob("*.py"))
 
 
+def vendor_source_paths(repository):
+    """Compile inputs of local vendored crates, including nested workspaces."""
+    root = Path(repository) / "native/vendor"
+    paths = set()
+    for pattern in ("*/Cargo.toml", "*/*/Cargo.toml"):
+        for manifest in root.glob(pattern):
+            paths.add(manifest)
+            package = manifest.parent
+            if (build := package / "build.rs").is_file():
+                paths.add(build)
+            for directory in ("src", "res"):
+                paths.update(
+                    path for path in (package / directory).rglob("*") if path.is_file()
+                )
+            if package.parent != root:
+                paths.update(path for path in package.glob("*.yaml") if path.is_file())
+    return paths
+
+
 def fingerprint(path):
     """SHA-256 and size of one file, read in bounded chunks."""
     path = Path(path)

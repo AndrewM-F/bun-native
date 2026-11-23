@@ -25,7 +25,13 @@ from . import native_interactions_scenario as INTERACTIONS
 from . import native_layout_scenario as LAYOUT
 from . import native_react_workspace_scenario as WORKSPACE
 from . import native_solid_workspace_scenario as SOLID_WORKSPACE
-from .common import ROOT, fingerprint, harness_sources, interrupt_handler
+from .common import (
+    ROOT,
+    fingerprint,
+    harness_sources,
+    interrupt_handler,
+    vendor_source_paths,
+)
 
 LOGGER = logging.getLogger(__name__)
 SCENARIOS = (
@@ -85,13 +91,7 @@ def source_snapshot():
     for manifest in (ROOT / "native").glob("*/Cargo.toml"):
         paths.append(manifest)
         paths.extend((manifest.parent / "src").rglob("*.rs"))
-    for manifest in (ROOT / "native/vendor").glob("*/Cargo.toml"):
-        paths.append(manifest)
-        if (build := manifest.parent / "build.rs").is_file():
-            paths.append(build)
-        paths.extend(
-            path for path in (manifest.parent / "src").rglob("*") if path.is_file()
-        )
+    paths.extend(vendor_source_paths(ROOT))
     return {str(path.relative_to(ROOT)): fingerprint(path) for path in sorted(paths)}
 
 

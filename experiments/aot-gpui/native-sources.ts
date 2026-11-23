@@ -9,6 +9,12 @@ export async function nativeSourcePaths(source: string): Promise<string[]> {
     'native/vendor/*/Cargo.toml',
     'native/vendor/*/build.rs',
     'native/vendor/*/src/**/*',
+    'native/vendor/*/res/**/*',
+    'native/vendor/*/*/Cargo.toml',
+    'native/vendor/*/*/build.rs',
+    'native/vendor/*/*/src/**/*',
+    'native/vendor/*/*/*.yaml',
+    'native/vendor/*/*/res/**/*',
   ]) {
     for await (const path of new Bun.Glob(pattern).scan({ cwd: source })) {
       paths.add(path.replaceAll('\\', '/'))

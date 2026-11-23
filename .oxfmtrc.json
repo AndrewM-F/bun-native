@@ -9,6 +9,9 @@
     ".github/actions/",
     "node_modules/**",
     "native/target/**",
+    "native/vendor/xim-rs/Cargo.toml",
+    "native/vendor/xim-rs/README.md",
+    "native/vendor/xim-rs/xim-parser/xim-format.yaml",
     "dist/**",
     ".bun-native/**"
   ],
