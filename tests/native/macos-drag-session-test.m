@@ -51,6 +51,9 @@ int main(void) {
         if (session_moves(&point) != 1 || point.x != 362 || point.y != 355) return 3;
         [view mouseDown:event];
         if (session_moves(&point) != 0 || isfinite(point.x) || isfinite(point.y)) return 4;
+        [view draggingSession:(NSDraggingSession *)(id)[FakeSession new]
+                 movedToPoint:NSMakePoint(120, 650)];
+        if (session_moves(&point) != 1 || point.x != 120 || point.y != 150) return 5;
         return 0;
     }
 }
