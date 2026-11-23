@@ -23,6 +23,7 @@ on:
             'runtime-compare',
             'runtime-link-control',
             'runtime-link-inspect',
+            'runtime-rust-symbols',
           ]
         default: 'none'
       runtime-build-run:
@@ -228,7 +229,7 @@ jobs:
 
   windows-runtime-build:
     name: Build pinned Windows runtime from source
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-build' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-build", "runtime-rust-symbols"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 240
     defaults:
@@ -281,6 +282,8 @@ jobs:
           python benchmarks/retention/shorten-upstream-build.py (Join-Path $env:GITHUB_WORKSPACE 'bun-source') (Join-Path $env:GITHUB_WORKSPACE 'webkit-source') (Join-Path $env:RUNNER_TEMP 'runtime-build-adjustments.json')
           if ($LASTEXITCODE -ne 0) { throw 'Build adjustment failed' }
       - name: Build source runtime with adjusted codegen paths and release LTO
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
         run: |
           $source = Join-Path $env:GITHUB_WORKSPACE 'bun-source'
           $webkit = Join-Path $env:GITHUB_WORKSPACE 'webkit-source'
@@ -309,6 +312,20 @@ jobs:
           if ([Array]::IndexOf([IO.File]::ReadAllBytes($aotSources), [byte]13) -ge 0) { throw 'WebKit AOT source list contains CRLF' }
           bun install --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { throw 'Bun source dependency install failed' }
+          if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-rust-symbols') {
+            bun scripts/build.ts --profile=release-local --lto=on --build-dir=build/release-local --target=bun-rust
+            if ($LASTEXITCODE -ne 0) { throw 'Pinned Rust archive build failed' }
+            $archives = @(Get-ChildItem build/release-local/rust-target -File -Recurse -Filter 'libbun_runtime-*.rlib')
+            if ($archives.Count -ne 1) { throw 'Expected exactly one Bun runtime archive' }
+            $evidence = Join-Path $env:RUNNER_TEMP 'runtime-rust-symbols'
+            New-Item -ItemType Directory -Path $evidence | Out-Null
+            Get-FileHash -Algorithm SHA256 $archives[0].FullName | Format-List | Out-File (Join-Path $evidence 'archive-hash.txt')
+            & (Join-Path $llvmDir 'llvm-nm.exe') --format=posix --defined-only $archives[0].FullName *> (Join-Path $evidence 'runtime-symbols.txt')
+            if ($LASTEXITCODE -ne 0) { throw 'Rust archive symbol inspection failed' }
+            rustc --version --verbose | Out-File (Join-Path $evidence 'rust-version.txt')
+            if ($LASTEXITCODE -ne 0) { throw 'Rust compiler identity failed' }
+            return
+          }
           bun scripts/build.ts --profile=release-local --lto=on --build-dir=build/release-local
           if ($LASTEXITCODE -ne 0) { throw 'Unmodified source runtime build failed' }
           $runtime = Resolve-Path build/release-local/bun.exe
@@ -346,11 +363,12 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: windows-uninstrumented-source-runtime
+          name: ${{ inputs.retention-diagnostic == 'runtime-rust-symbols' && 'windows-source-rust-symbols' || 'windows-uninstrumented-source-runtime' }}
           path: |
             bun-source/build/release-local/bun.exe
             ${{ runner.temp }}/runtime-build-adjustments.json
             ${{ runner.temp }}/runtime-link-inputs/
+            ${{ runner.temp }}/runtime-rust-symbols/
           if-no-files-found: warn
           retention-days: 7
 
