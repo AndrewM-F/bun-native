@@ -162,11 +162,12 @@ final class Output: NSObject, SCStreamOutput {
     let result = URL(fileURLWithPath: a[8])
     let arm = URL(fileURLWithPath: a[9])
     let armed = URL(fileURLWithPath: a[9] + ".ack.json")
+    let stop = URL(fileURLWithPath: a[9] + ".stop")
     guard let temp = ProcessInfo.processInfo.environment["RUNNER_TEMP"], temp.hasPrefix("/") else {
       throw Failure.reason("missing runner temp")
     }
     let prefix = URL(fileURLWithPath: temp).resolvingSymlinksInPath().path + "/"
-    for path in [ready, result, arm, armed] {
+    for path in [ready, result, arm, armed, stop] {
       let parent = path.deletingLastPathComponent().resolvingSymlinksInPath().path + "/"
       guard parent.hasPrefix(prefix), !FileManager.default.fileExists(atPath: path.path) else {
         throw Failure.reason("output outside owned runner temp or exists")
@@ -226,7 +227,12 @@ final class Output: NSObject, SCStreamOutput {
       try await displayStream.startCapture()
       var readyWritten = false
       var isArmed = false
+      var stopped = false
       for _ in 0..<500 {
+        if FileManager.default.fileExists(atPath: stop.path) {
+          stopped = true
+          break
+        }
         let state = matches.state()
         if !readyWritten, let first = state.ready {
           let data = try JSONSerialization.data(
@@ -261,7 +267,7 @@ final class Output: NSObject, SCStreamOutput {
         }
         try await Task.sleep(for: .milliseconds(20))
       }
-      guard FileManager.default.fileExists(atPath: result.path) else {
+      guard stopped || FileManager.default.fileExists(atPath: result.path) else {
         throw Failure.reason("matching changed label not observed")
       }
       try await displayStream.stopCapture()

@@ -10,6 +10,7 @@ import { compareVisiblePixels } from './visible-pixels.ts'
 import { verifyVisibleText } from './visible-text.ts'
 import { awaitUnobstructedStream, awaitVisibleReadiness } from './visible-readiness.ts'
 import { hashCaptureRegion, verifyStreamEvidence } from './stream-evidence.ts'
+import { stopVisibleStream } from './visible-stream-cleanup.ts'
 
 const TITLE = 'Bun Native matched renderer workload'
 const { values } = parseArgs({
@@ -104,6 +105,7 @@ const child = Bun.spawn(
   }
 )
 let streamChild: ReturnType<typeof Bun.spawn> | undefined
+const streamStopPath = join(output, 'stream-armed.stop')
 let groupOwned = false
 let result: Record<string, unknown> = { status: 'failed', nonce }
 function command(args: string[], timeout = 10_000) {
@@ -596,21 +598,13 @@ try {
   result['error'] = error instanceof Error ? error.message : String(error)
 } finally {
   if (streamChild && streamChild.exitCode === null) {
-    try {
-      streamChild.kill('SIGTERM')
-      const stopped = await Promise.race([streamChild.exited, Bun.sleep(2000).then(() => null)])
-      result['streamForcedCleanup'] = true
-      result['status'] = 'failed'
-      if (stopped === null) {
-        streamChild.kill('SIGKILL')
-        const killed = await Promise.race([streamChild.exited, Bun.sleep(2000).then(() => null)])
-        if (killed === null)
-          result['streamCleanupError'] = 'Stream helper did not exit after SIGKILL'
-      }
-    } catch (error) {
-      result['streamCleanupError'] = error instanceof Error ? error.message : String(error)
-      result['status'] = 'failed'
-    }
+    // A cleanup request never turns a failed run into a pass.
+    result['status'] = 'failed'
+    const cleanup = await stopVisibleStream(streamChild, streamStopPath)
+    result['streamForcedCleanup'] = cleanup.forced
+    result['streamStopExitCode'] = cleanup.exitCode
+    if (cleanup.requestError) result['streamStopRequestError'] = cleanup.requestError
+    if (cleanup.error) result['streamCleanupError'] = cleanup.error
   }
   if (groupOwned) {
     try {
