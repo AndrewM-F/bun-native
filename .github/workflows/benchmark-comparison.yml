@@ -11,7 +11,15 @@ on:
         description: Run the isolated Windows retention scan control only
         type: choice
         options:
-          ['none', 'narrow-scan', 'batch-release', 'listener', 'shutdown', 'first-observation']
+          [
+            'none',
+            'narrow-scan',
+            'batch-release',
+            'listener',
+            'shutdown',
+            'first-observation',
+            'runtime-preflight',
+          ]
         default: 'none'
       trials:
         description: Measured timed trials per artifact (3 to 30)
@@ -57,6 +65,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  windows-runtime-preflight:
+    name: Windows runtime build preflight
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Inspect available build tools and disk space
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object DeviceID, Size, FreeSpace | Format-Table
+          foreach ($tool in @('clang', 'clang-cl', 'lld-link', 'rustup', 'cargo', 'go', 'nasm', 'ruby', 'perl', 'python', 'cmake', 'ninja', 'make', 'bash')) {
+            $command = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($command) { Write-Output "$tool : $($command.Source)" } else { Write-Output "$tool : unavailable" }
+          }
+          if (Get-Command clang -CommandType Application -ErrorAction SilentlyContinue) { clang --version }
+          if (Get-Command rustup -CommandType Application -ErrorAction SilentlyContinue) { rustup show }
+
   linux:
     name: Linux core/Solid/React development and AOT comparison
     if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic == 'none')
