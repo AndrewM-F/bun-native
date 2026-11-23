@@ -523,6 +523,7 @@ class Nvda implements Reader {
   async start() {
     mkdirSync(this.#config)
     const eventDebug = process.env['BUN_NATIVE_NVDA_EVENT_DEBUG'] === 'true'
+    const disableEnhanced = eventDebug && process.env['BUN_NATIVE_NVDA_DISABLE_ENHANCED'] === 'true'
     // The silence synthesizer keeps the run independent of audio devices and
     // voices; NVDA logs each sequence before handing it to the synthesizer.
     writeFileSync(
@@ -538,6 +539,7 @@ class Nvda implements Reader {
         '\tallowUsageStats = False',
         '\taskedAllowUsageStats = True',
         ...(eventDebug ? ['[debugLog]', '\tUIA = True', '\tMSAA = True', '\tevents = True'] : []),
+        ...(disableEnhanced ? ['[UIA]', '\tenhancedEventProcessing = DISABLED'] : []),
         '',
       ].join('\r\n')
     )
@@ -563,6 +565,7 @@ class Nvda implements Reader {
       nvda: version,
       synthesizer: 'silence',
       eventDebug,
+      disableEnhanced,
       output: 'NVDA log includes Speaking sequences',
     }
   }
