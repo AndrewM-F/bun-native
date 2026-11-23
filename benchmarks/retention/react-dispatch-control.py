@@ -25,6 +25,41 @@ def variant_source(source, clear):
     )
 
 
+def listener_source(source, variant):
+    if variant not in ("baseline", "clear-setters", "clear-listener", "pin-listener"):
+        raise ValueError("Unknown listener control variant")
+    source = replace_once(
+        source,
+        "  const listener = () => {\n",
+        "  let listener: (() => void) | undefined = () => {\n",
+    )
+    if variant == "pin-listener":
+        marker = "  if (!content.current) throw new Error('React content ref was not attached at native readiness')\n"
+        source = replace_once(
+            source,
+            marker,
+            marker
+            + "  ;(globalThis as unknown as { __listenerDiagnosticPin?: object }).__listenerDiagnosticPin = listener\n",
+        )
+    action = {
+        "baseline": "",
+        "clear-setters": " setText = undefined!; setRows = undefined!;",
+        "clear-listener": " listener = undefined;",
+        "pin-listener": "",
+    }[variant]
+    return replace_once(
+        source, MARKER, f"async dispose() {{ await view.dispose();{action} }},"
+    )
+
+
+def listener_pin_valid(raw, mode):
+    expected = 5 if mode == "development" else 299
+    return (
+        raw["status"] == "failed"
+        and expected in raw["retentionObservation"]["stillReachable"]
+    )
+
+
 def replace_once(source, old, new):
     if source.count(old) != 1:
         raise ValueError("Expected exactly one diagnostic source marker")
@@ -163,7 +198,7 @@ def main():
     trials = int(sys.argv[3])
     kind = sys.argv[4] if len(sys.argv) > 4 else "dispatch"
     runtime = sys.argv[5] if len(sys.argv) > 5 else None
-    if kind not in ("dispatch", "shutdown", "cycle", "first-observation"):
+    if kind not in ("dispatch", "shutdown", "cycle", "first-observation", "listener"):
         raise ValueError("Unknown control kind")
     if not 1 <= trials <= 10:
         raise ValueError("Trial count must be in 1..10")
@@ -183,6 +218,8 @@ def main():
         if kind == "cycle"
         else ("baseline", "omit-first", "pin-baseline", "pin-omit-first")
         if kind == "first-observation"
+        else ("baseline", "clear-setters", "clear-listener", "pin-listener")
+        if kind == "listener"
         else ("baseline", "clear")
     )
     workloads = {
@@ -203,6 +240,8 @@ def main():
                 or (kind == "first-observation" and name.startswith("pin-")),
             )
             if kind in ("shutdown", "cycle", "first-observation")
+            else listener_source(source, name)
+            if kind == "listener"
             else variant_source(source, name == "clear")
         )
         for name in variants
@@ -241,6 +280,8 @@ def main():
             if kind == "cycle"
             else "Omit-first skips only the diagnostic first dereference; pinned variants retain the latest render root globally."
             if kind == "first-observation"
+            else "The variants clear setters or the listener after disposal, or intentionally pin the listener as a positive control."
+            if kind == "listener"
             else "Both use the same async dispose wrapper; clear additionally assigns undefined to both React hook setters after disposal."
         ),
         "scope": "Headless diagnostic variants, not the actual benchmark fixture or native rendering.",
@@ -351,6 +392,12 @@ def main():
                             (child_output / f"00-{record['mode']}.json").read_text()
                         )
                         valid = valid and cycle_pin_valid(raw, record["mode"])
+                if valid and kind == "listener" and variant == "pin-listener":
+                    for record in records:
+                        raw = json.loads(
+                            (child_output / f"00-{record['mode']}.json").read_text()
+                        )
+                        valid = valid and listener_pin_valid(raw, record["mode"])
                 if valid and kind == "first-observation":
                     for record in records:
                         raw = json.loads(

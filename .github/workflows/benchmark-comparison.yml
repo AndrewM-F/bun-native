@@ -10,7 +10,7 @@ on:
       retention-diagnostic:
         description: Run the isolated Windows retention scan control only
         type: choice
-        options: ['none', 'narrow-scan', 'batch-release']
+        options: ['none', 'narrow-scan', 'batch-release', 'listener']
         default: 'none'
       trials:
         description: Measured timed trials per artifact (3 to 30)
@@ -536,4 +536,41 @@ jobs:
           path: |
             ${{ runner.temp }}/batch-release-control/
             !${{ runner.temp }}/batch-release-control/**/*.exe
+          retention-days: 30
+
+  windows-listener-control:
+    name: Windows listener retention control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'listener'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Build the pinned headless peer
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'listener-retention-control'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+      - name: Compare listener and setter lifetimes with a pinned-listener control
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'listener-retention-control'
+          $runtime = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/react-dispatch-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'results') 3 listener $runtime
+          if ($LASTEXITCODE -ne 0) { throw 'A listener control was invalid' }
+      - name: Retain observations and failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-listener-control
+          path: |
+            ${{ runner.temp }}/listener-retention-control/
+            !${{ runner.temp }}/listener-retention-control/**/*.exe
           retention-days: 30
