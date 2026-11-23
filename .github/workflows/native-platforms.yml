@@ -655,6 +655,10 @@ jobs:
         if: ${{ matrix.shard == 2 && (runner.os != 'Linux' && !cancelled() && steps.native-build.outcome == 'success') }}
         timeout-minutes: 6
         run: |
+          if ($IsWindows) {
+            bun test tests/quality/windows-filetime-evidence.test.ts
+            if ($LASTEXITCODE -ne 0) { throw 'Windows FILETIME evidence control failed' }
+          }
           $package = Join-Path $env:NATIVE_EVIDENCE 'filesystem-grants-package'
           bun scripts/quality/compile-aot-entries.ts --entry filesystem-grants --outdir $package
           if ($LASTEXITCODE -ne 0) { throw 'The filesystem grants AOT compiler or inspection failed' }
