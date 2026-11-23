@@ -37,8 +37,9 @@ instrumentation, not a diagnosis of the recorded failure.
 For host process initialization, a separate opt-in
 `BUN_NATIVE_HOST_STARTUP_TRACE=1` uses the same absolute evidence path and
 bounded correlation ID. It buffers seven monotonic timestamps and appends one
-`host-startup-phases` record after the first native command dispatch; no trace
-file I/O occurs between those timestamps. The first command may be invalid or
+`host-startup-phases` record after the first native command dispatch. Recording
+these timestamps performs no file writes; the existing evidence setup may open
+the evidence file during initialization. The first command may be invalid or
 may not be hello. A process that exits or stalls before the first dispatch does
 not produce this record. The record includes no command payload, and an append
 failure does not change protocol behavior.
