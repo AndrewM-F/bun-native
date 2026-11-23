@@ -12,8 +12,9 @@ import {
   type NativeEvent,
 } from '@bun-native/protocol'
 import assert from 'node:assert/strict'
-import { networkInterfaces } from 'node:os'
-import { isAbsolute } from 'node:path'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { networkInterfaces, tmpdir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 
 const executable = process.env['BUN_NATIVE_HOST']
 if (!executable || !isAbsolute(executable))
@@ -22,14 +23,37 @@ const CASE_DEADLINE_MS = 10_000
 const display = Boolean(process.env['DISPLAY'] || process.env['WAYLAND_DISPLAY'])
 const DISPLAY_CASES = new Set(['opens-and-closes-a-real-window'])
 
-class RawHost {
-  private readonly process = Bun.spawn([executable!], {
+function spawnHost(tracePath?: string) {
+  return Bun.spawn([executable!], {
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
+    env: tracePath
+      ? {
+          ...process.env,
+          BUN_NATIVE_HOST_STARTUP_TRACE: '1',
+          BUN_NATIVE_EVIDENCE_LOG: tracePath,
+          BUN_NATIVE_EVIDENCE_NONCE: 'boundary-test',
+        }
+      : process.env,
   })
+}
+
+function getHostReader(host: ReturnType<typeof spawnHost>) {
+  return host.stdout.getReader()
+}
+
+class RawHost {
+  private readonly process: ReturnType<typeof spawnHost>
+  private readonly reader: ReturnType<typeof getHostReader>
+  constructor(readonly tracePath?: string) {
+    this.process = spawnHost(tracePath)
+    this.reader = getHostReader(this.process)
+  }
+  get pid(): number {
+    return this.process.pid
+  }
   private readonly decoder = new FrameDecoder()
-  private readonly reader = this.process.stdout.getReader()
   private readonly queued: NativeEvent[] = []
   private inputEnded = false
 
@@ -116,6 +140,34 @@ if (process.env['BUN_NATIVE_REQUIRE_OFFLINE'] === '1') {
 }
 
 const cases: Record<string, (host: RawHost) => Promise<Record<string, unknown>>> = {
+  async 'buffered-host-startup-trace'(host) {
+    await host.hello(1)
+    const exit = await host.shutdown(2)
+    assert(host.tracePath)
+    const records = (await Bun.file(host.tracePath).text())
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    const startup = records.filter((record) => record.stage === 'host-startup-phases')
+    assert.equal(startup.length, 1)
+    const record = startup[0]
+    assert.equal(record.nonce, 'boundary-test')
+    assert.equal(record.pid, host.pid)
+    assert.equal(record.clock, 'host_monotonic_relative')
+    const phases = [
+      'policy_ready',
+      'channels_ready',
+      'platform_ready',
+      'app_callback',
+      'session_ready',
+      'first_dispatch_enter',
+      'first_dispatch_return',
+    ]
+    assert.deepEqual(Object.keys(record.phases_ns).sort(), [...phases].sort())
+    const times = phases.map((name) => BigInt(record.phases_ns[name]))
+    assert(times.every((value, index) => index === 0 || value >= times[index - 1]!))
+    return { exit }
+  },
   async 'opens-and-closes-a-real-window'(host) {
     await host.hello(1)
     await host.send({
@@ -302,7 +354,11 @@ function paddedFrame(value: unknown, bytes: number): string {
 const results: Record<string, unknown>[] = []
 for (const [name, run] of Object.entries(cases)) {
   if (!display && DISPLAY_CASES.has(name)) continue
-  const host = new RawHost()
+  const traceDirectory =
+    name === 'buffered-host-startup-trace'
+      ? await mkdtemp(join(tmpdir(), 'bun-native-host-startup-'))
+      : undefined
+  const host = new RawHost(traceDirectory ? join(traceDirectory, 'evidence.jsonl') : undefined)
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const started = performance.now()
@@ -320,6 +376,7 @@ for (const [name, run] of Object.entries(cases)) {
   } finally {
     clearTimeout(timer)
     host.kill()
+    if (traceDirectory) await rm(traceDirectory, { recursive: true, force: true })
   }
 }
 console.log(

@@ -34,6 +34,26 @@ instrumentation, not a diagnosis of the recorded failure.
 
 ## Activation and scope
 
+For host process initialization, a separate opt-in
+`BUN_NATIVE_HOST_STARTUP_TRACE=1` uses the same absolute evidence path and
+bounded correlation ID. It buffers seven monotonic timestamps and appends one
+`host-startup-phases` record after the first native command dispatch; no trace
+file I/O occurs between those timestamps. The first command may be invalid or
+may not be hello. A process that exits or stalls before the first dispatch does
+not produce this record. The record includes no command payload, and an append
+failure does not change protocol behavior.
+
+The timestamps begin inside `main`, after checking the opt-in flag; they do not
+include process spawn, dynamic loading before `main`, response delivery, window
+creation or presentation. `policy_ready` follows command-line policy parsing;
+`channels_ready` follows channel and evidence setup; `platform_ready` follows
+`gpui_platform::application()` (platform and application construction);
+`app_callback` is the GPUI run callback; `session_ready` follows session setup;
+and `first_dispatch_enter` / `first_dispatch_return` bracket dispatch of the
+first received item. Compare phases only within this host record. The trace
+adds clock reads and enables evidence setup, so measure its overhead against
+untraced controls on the same workload before using it for attribution.
+
 Tracing requires `BUN_NATIVE_STARTUP_TRACE=1`, an absolute
 `BUN_NATIVE_EVIDENCE_LOG`, and a nonempty, control-free
 `BUN_NATIVE_EVIDENCE_NONCE` of at most 128 UTF-8 bytes. Without the explicit flag,
