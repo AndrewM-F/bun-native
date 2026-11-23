@@ -1287,6 +1287,12 @@ jobs:
             xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework AppKit -framework CoreGraphics `
               tests/native/macos-drag-source.m -o $dragSource
             if ($LASTEXITCODE -ne 0) { throw 'The AppKit NSDraggingSession source did not compile' }
+            $sessionTest = Join-Path $env:NATIVE_EVIDENCE 'macos-drag-session-test'
+            xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework AppKit -framework CoreGraphics `
+              tests/native/macos-drag-session-test.m -o $sessionTest
+            if ($LASTEXITCODE -ne 0) { throw 'The AppKit drag session test did not compile' }
+            & $sessionTest
+            if ($LASTEXITCODE -ne 0) { throw 'The AppKit drag session test failed' }
           } else {
             $csc = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
             if (!(Test-Path -LiteralPath $csc -PathType Leaf)) { throw 'The .NET Framework C# compiler is unavailable' }
