@@ -618,12 +618,15 @@ after every focus step before it judges VoiceOver.
   those records into phrases. Keys come from
   [`windows-input-oracle.ps1`](../tests/native/windows-input-oracle.ps1)
   (`SendInput`), and "Where Am I" is NVDA+Tab. Each step must produce a phrase
-  containing the name and `button` or `edit`.
+  containing the name and `button` or `edit`. Optional independent UI Automation
+  snapshots record focused controls after the speech deadline; a separate
+  bounded observer can record focus-change events from the fixture process.
+  The observer can affect timing and cannot prove an event absent if it fails
+  or drops records. Neither diagnostic replaces the speech assertion.
 - Narrator offers no automation interface that this suite uses, and it is not
   run.
 
-**OS input methods: macOS gating and passing; Windows experimental and has
-not passed (#629).**
+**OS input methods: macOS and Windows hosted checks gate development and AOT.**
 [`tests/native/ime-platform.ts`](../tests/native/ime-platform.ts) repeats the
 Linux Hangul sequence (`ㄱ`, `가`, `갈`, Backspace `가`, Space `가 `, `가 ㄱ`,
 `가 가`) with the operating system's own Korean input method. On macOS that is
@@ -632,12 +635,15 @@ selected through Text Input Sources and restored afterwards. On Windows it is
 the Microsoft Korean IME, switched on in the host window with
 `WM_INPUTLANGCHANGEREQUEST` and `IMC_SETOPENSTATUS`/`IMC_SETCONVERSIONMODE`, or
 with the Hangul key if the mode request does not take. The step records whether
-windows-2022 has the Korean IME and installs `Language.Basic~~~ko-KR~0.0.1.0`
-when it does not. Japanese or Chinese conversion with a candidate window is not
-attempted. The step `macOS and experimental Windows Korean input method
-composition in development and AOT (#241)` gates on macOS, where it passed in
-development and AOT in runs 42938725505, 43087027363 and 43093920340. On
-Windows it keeps the screen-reader step's non-gating status.
+windows-2022 has the Korean IME, installs `Language.Basic~~~ko-KR~0.0.1.0` when
+the capability is absent, and adds Korean to the hosted account's existing
+language list when needed. Japanese or Chinese conversion with a candidate
+window is not attempted. The step gates on macOS, where it passed in development
+and AOT in runs 42938725505, 43087027363 and 43093920340. On Windows, [run
+45194395432](https://github.com/AndrewM-F/bun-native/actions/runs/45194395432)
+passed the unchanged composition sequence in both modes after the capability and
+user language were configured. This hosted result does not qualify physical
+keyboards or other IMEs.
 
 In the first hosted run (run 42936020446), macOS selected the 2-Set Korean
 mode (the helper read it back as selected) while the host was frontmost, but
@@ -649,13 +655,15 @@ Windows PowerShell. Whether windows-2022 has the Korean IME is still unknown.
 
 In the second hosted run (run 42938725505), macOS passed in development and
 AOT. On windows-2022 the Korean TIP and the `00000412` layout are present
-(`Language.Basic~~~ko-KR` is `NotPresent` and was not needed). The window
+(`Language.Basic~~~ko-KR` was `NotPresent` and was not installed). The window
 switched to `04120412`, and IMM then reported the IME open in Hangul
 conversion mode. Even so, `r` from `SendInput` arrived as `r`, not `ㄱ`. IMM
 also reported Hangul mode before the switch, while the layout was still US
 English, so its conversion mode may not show the TSF Korean IME's real state.
 The cause is unknown. The fixture now records the IMM state again when a step
-fails. The Windows step stays experimental.
+fails. Installing the capability alone still failed in run 45189513413; the
+later passing run above also configured the user's language list. These runs do
+not isolate the individual contribution of each setup change.
 
 ## Observed run notes
 
