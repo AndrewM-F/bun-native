@@ -40,6 +40,7 @@ import {
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { nvdaSpeech } from './screen-reader-speech.ts'
+import { PhraseTiming } from './screen-reader-timing.ts'
 
 const output = process.env['BUN_NATIVE_SR_EVIDENCE']
 const executable = process.env['BUN_NATIVE_HOST']
@@ -391,6 +392,9 @@ const osascript = (script: string) => run(['/usr/bin/osascript', '-e', script])
 class VoiceOver implements Reader {
   readonly name = 'VoiceOver'
   #phrases: string[] = []
+  #timing = new PhraseTiming()
+  #attachStartMs: number | null = null
+  #attachEndMs: number | null = null
   #polling = false
   #poller: Promise<void> | undefined
   #pid = 0
@@ -426,10 +430,15 @@ class VoiceOver implements Reader {
     this.#polling = true
     this.#poller = (async () => {
       while (this.#polling) {
+        const pollStart = performance.now() - started
         const phrase = await osascript(
           'tell application "VoiceOver" to return content of last phrase'
         ).catch(() => '')
-        if (phrase && phrase !== this.#phrases.at(-1)) this.#phrases.push(phrase)
+        const pollEnd = performance.now() - started
+        if (phrase && phrase !== this.#phrases.at(-1)) {
+          this.#phrases.push(phrase)
+          this.#timing.add(this.#phrases.length - 1, pollStart, pollEnd, this.#pid)
+        }
         await Bun.sleep(50)
       }
     })()
@@ -438,6 +447,7 @@ class VoiceOver implements Reader {
   }
 
   async attach(pid: number) {
+    this.#attachStartMs = performance.now() - started
     this.#pid = pid
     // The oracle activates the app by PID. Immediately after launch the process is
     // not yet registered with the accessibility system, and the oracle exits 1
@@ -448,6 +458,7 @@ class VoiceOver implements Reader {
     for (;;) {
       try {
         await run([driver!, 'activate', String(pid)])
+        this.#attachEndMs = performance.now() - started
         return
       } catch (error) {
         if (performance.now() > deadline) throw error
@@ -463,6 +474,17 @@ class VoiceOver implements Reader {
 
   utterances() {
     return this.#phrases.slice()
+  }
+
+  timing() {
+    return {
+      clock: 'performance.now() relative to fixture start',
+      scope: 'poll interval, not the time VoiceOver spoke',
+      attachStartMs: this.#attachStartMs,
+      attachEndMs: this.#attachEndMs,
+      capturedAtMs: performance.now() - started,
+      ...this.#timing.snapshot(),
+    }
   }
 
   async stop() {
@@ -615,6 +637,7 @@ const steps: Array<{
   phrases: string[]
   missing?: Expectation
   axFocus?: unknown
+  axFocusInterval?: { startMs: number; endMs: number } | undefined
 }> = []
 // A step whose expected phrase never came is recorded and the scenario goes on,
 // so one run shows every step a screen reader misses; the run still fails.
@@ -779,7 +802,10 @@ try {
         10_000,
         () => focusTrace().join()
       )
+    const axStart = mac && focus ? performance.now() - started : undefined
     const axFocus = mac && focus ? await checkAxFocus(label, focus) : undefined
+    const axFocusInterval =
+      axStart === undefined ? undefined : { startMs: axStart, endMs: performance.now() - started }
     let spoken = true
     await waitFor(
       () => matches(reader.utterances().slice(from), expected),
@@ -793,9 +819,9 @@ try {
     })
     await Bun.sleep(settle)
     const phrases = reader.utterances().slice(from)
-    if (spoken) steps.push({ step: label, key, focus, phrases, axFocus })
+    if (spoken) steps.push({ step: label, key, focus, phrases, axFocus, axFocusInterval })
     else {
-      steps.push({ step: label, key, focus, phrases, missing: expected, axFocus })
+      steps.push({ step: label, key, focus, phrases, missing: expected, axFocus, axFocusInterval })
       missed.push({ step: label, expected, phrases })
     }
     console.log(JSON.stringify({ step: label, phrases, spoken, ...(axFocus ? { axFocus } : {}) }))
@@ -1028,7 +1054,14 @@ try {
   writeFileSync(
     join(evidence, 'utterances.json'),
     JSON.stringify(
-      { reader: reader.name, utterances: reader.utterances(), steps, missed, axMissed },
+      {
+        reader: reader.name,
+        utterances: reader.utterances(),
+        steps,
+        missed,
+        axMissed,
+        ...(reader instanceof VoiceOver ? { voiceOverTiming: reader.timing() } : {}),
+      },
       null,
       2
     ) + '\n'
