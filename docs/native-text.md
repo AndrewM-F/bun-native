@@ -640,11 +640,11 @@ windows-2022 has the Korean IME, installs `Language.Basic~~~ko-KR~0.0.1.0` when
 the capability is absent, and adds Korean to the hosted account's existing
 language list when needed. Japanese or Chinese conversion with a candidate
 window is not attempted. The step gates on macOS, where it passed in development
-and AOT in runs 42938725505, 43087027363 and 43093920340. On Windows, [run
-45194395432](https://github.com/AndrewM-F/bun-native/actions/runs/45194395432)
+and AOT in runs 42938725505, 43087027363 and 43093920340. The completed Windows
+shard of [run 45194395432](https://github.com/AndrewM-F/bun-native/actions/runs/45194395432)
 passed the unchanged composition sequence in both modes after the capability and
-user language were configured. This hosted result does not qualify physical
-keyboards or other IMEs.
+user language were configured; its superseded macOS jobs were cancelled. This
+hosted result does not qualify physical keyboards or other IMEs.
 
 In the first hosted run (run 42936020446), macOS selected the 2-Set Korean
 mode (the helper read it back as selected) while the host was frontmost, but
