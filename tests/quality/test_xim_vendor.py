@@ -24,6 +24,17 @@ class XimVendorTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "source mismatch"):
                     VENDOR.verify(package)
 
+    def test_dependency_patch_must_be_exact(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "xim-rs"
+            shutil.copytree(ROOT, package)
+            manifest = package / "Cargo.toml"
+            manifest.write_text(
+                manifest.read_text().replace('version = "0.14"', 'version = "0.15"')
+            )
+            with self.assertRaisesRegex(ValueError, "dependency patch"):
+                VENDOR.verify(package)
+
     def test_extra_file_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
             package = Path(temporary) / "xim-rs"

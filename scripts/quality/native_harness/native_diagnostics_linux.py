@@ -25,7 +25,13 @@ from . import native_interactions_scenario as INTERACTIONS
 from . import native_layout_scenario as LAYOUT
 from . import native_react_workspace_scenario as WORKSPACE
 from . import native_solid_workspace_scenario as SOLID_WORKSPACE
-from .common import ROOT, fingerprint, harness_sources, interrupt_handler, vendor_source_paths
+from .common import (
+    ROOT,
+    fingerprint,
+    harness_sources,
+    interrupt_handler,
+    vendor_source_paths,
+)
 
 LOGGER = logging.getLogger(__name__)
 SCENARIOS = (

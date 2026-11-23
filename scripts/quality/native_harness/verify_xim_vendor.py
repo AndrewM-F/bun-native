@@ -31,6 +31,9 @@ def verify(package):
             if data.count(AFTER) != 1 or BEFORE in data:
                 raise ValueError("unexpected XIM dependency patch")
             data = data.replace(AFTER, BEFORE)
-        if len(data) != record["bytes"] or hashlib.sha256(data).hexdigest() != record["sha256"]:
+        if (
+            len(data) != record["bytes"]
+            or hashlib.sha256(data).hexdigest() != record["sha256"]
+        ):
             raise ValueError(f"XIM upstream source mismatch: {name}")
     return len(files)

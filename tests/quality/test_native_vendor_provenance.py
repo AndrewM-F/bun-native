@@ -29,7 +29,10 @@ class NestedVendorInputs(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("fixture")
             self.assertEqual(
-                {path.relative_to(root).as_posix() for path in vendor_source_paths(root)},
+                {
+                    path.relative_to(root).as_posix()
+                    for path in vendor_source_paths(root)
+                },
                 set(names),
             )
 
@@ -45,7 +48,9 @@ class NativeVendorInputs(unittest.TestCase):
                 if (path := package / name).is_file():
                     expected.add(path)
             for directory in ("src", "res"):
-                expected.update(path for path in (package / directory).rglob("*") if path.is_file())
+                expected.update(
+                    path for path in (package / directory).rglob("*") if path.is_file()
+                )
             for child in package.iterdir():
                 if not child.is_dir() or not (child / "Cargo.toml").is_file():
                     continue
@@ -54,7 +59,11 @@ class NativeVendorInputs(unittest.TestCase):
                     expected.add(child / "build.rs")
                 expected.update(path for path in child.glob("*.yaml") if path.is_file())
                 for directory in ("src", "res"):
-                    expected.update(path for path in (child / directory).rglob("*") if path.is_file())
+                    expected.update(
+                        path
+                        for path in (child / directory).rglob("*")
+                        if path.is_file()
+                    )
         self.assertIn(ROOT / "native/vendor/wgpu-hal/build.rs", expected)
         self.assertIn(
             ROOT / "native/vendor/wgpu-hal/src/gles/shaders/clear.frag", expected

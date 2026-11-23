@@ -144,7 +144,10 @@ def expected_sources(repository, *, source_commit=None):
             path.relative_to(repository).as_posix()
             for path in (manifest.parent / "src").rglob("*.rs")
         )
-    paths.update(path.relative_to(repository).as_posix() for path in vendor_source_paths(repository))
+    paths.update(
+        path.relative_to(repository).as_posix()
+        for path in vendor_source_paths(repository)
+    )
     return paths
 
 
