@@ -69,7 +69,7 @@ function percentile(sorted: readonly number[], fraction: number): number {
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)]!
 }
 
-type Scenario = 'text' | 'row' | 'move' | 'swap'
+type Scenario = 'text' | 'row' | 'move' | 'swap' | 'rotate'
 
 /** Native operations one commit of each scenario must send. */
 const expected: Record<Scenario, Operations> = {
@@ -81,6 +81,7 @@ const expected: Record<Scenario, Operations> = {
   move: { create: 0, set: 0, insert: 1, remove: 0 },
   // Swap the second and second-to-last keyed rows: two inserts.
   swap: { create: 0, set: 0, insert: 2, remove: 0 },
+  rotate: { create: 0, set: 0, insert: 1, remove: 0 },
 }
 
 async function measure(scenario: Scenario, rows: number, samples: number) {
@@ -128,7 +129,11 @@ async function measure(scenario: Scenario, rows: number, samples: number) {
     const index = (sample * 7919) % rows
     if (scenario === 'text') replaceText(labels[index]! as never, 'row ' + sample + '!')
     else if (scenario === 'move') insertNode(groups[(sample + 1) % 2] as never, group as never)
-    else if (scenario === 'swap') {
+    else if (scenario === 'rotate') {
+      const last = boxes.pop()!
+      insertNode(container as never, last as never, boxes[0] as never)
+      boxes.unshift(last)
+    } else if (scenario === 'swap') {
       const [first, last] = [boxes[1]!, boxes[rows - 2]!]
       insertNode(container as never, last as never, first as never)
       insertNode(container as never, first as never, boxes[rows - 1] as never)
@@ -185,7 +190,7 @@ async function measure(scenario: Scenario, rows: number, samples: number) {
 
 const sizes = process.argv.slice(2).map(Number)
 const results = []
-for (const scenario of ['text', 'row', 'move', 'swap'] as const)
+for (const scenario of ['text', 'row', 'move', 'swap', 'rotate'] as const)
   for (const rows of sizes.length ? sizes : [333, 1667]) {
     const samples = rows > 1000 ? 1000 : 2000
     results.push(await measure(scenario, rows, samples))
