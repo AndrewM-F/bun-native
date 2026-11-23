@@ -31,6 +31,24 @@ CHANGES = {
             ),
         ),
     ),
+    "scripts/build/codegen.ts": (
+        "49a21a308e1d081578ab3db31242e7f8781d0c32a757febdcd56177d0812895d",
+        (
+            (
+                "`${crates.get(src)}=${src}`",
+                "`${crates.get(src)}=${relative(cfg.cwd, src)}`",
+            ),
+        ),
+    ),
+    "src/codegen/bindgen.ts": (
+        "0ee01d998363b21689ad8d6f51c93e6789ecef191105a359b1c5465e2cc5d764",
+        (
+            (
+                "  .filter(source => source.length > 0)\n  .sort();",
+                '  .filter(source => source.length > 0)\n  .map(source => { const at = source.indexOf("="); return source.slice(0, at + 1) + path.resolve(source.slice(at + 1)); })\n  .sort();',
+            ),
+        ),
+    ),
 }
 ICU_SHA256 = "41bd03ef64dd84f6433edca3ede6835ad9aaf416434a2b9132d56666b348f74a"
 
