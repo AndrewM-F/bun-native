@@ -1,4 +1,4 @@
-"""Require source-bound startup milestones after a successful native smoke."""
+"""Require correlated startup milestones after a successful native smoke."""
 
 import json
 import sys
