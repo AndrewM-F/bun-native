@@ -1117,10 +1117,17 @@ jobs:
               # ("Invalid managed/unmanaged type combination"); ask Windows PowerShell.
               languages = @(powershell.exe -NoProfile -NonInteractive -Command '(Get-WinUserLanguageList).LanguageTag')
             } | ConvertTo-Json | Out-File (Join-Path $env:NATIVE_EVIDENCE 'windows-ime-before.json')
-            if (-not ($tip -and $layout)) {
+            # Registry entries can exist while the corresponding language
+            # capability is absent on the hosted image. Record and test the
+            # installed capability rather than assuming those keys suffice.
+            if (-not ($tip -and $layout) -or $capability.State -ne 'Installed') {
               Add-WindowsCapability -Online -Name 'Language.Basic~~~ko-KR~0.0.1.0' |
                 ConvertTo-Json | Out-File (Join-Path $env:NATIVE_EVIDENCE 'windows-ime-capability.json')
             }
+            $after = Get-WindowsCapability -Online -Name 'Language.Basic~~~ko-KR~0.0.1.0'
+            [ordered]@{ capability = "$($after.State)" } |
+              ConvertTo-Json | Out-File (Join-Path $env:NATIVE_EVIDENCE 'windows-ime-after.json')
+            if ($after.State -ne 'Installed') { throw "Korean language capability is $($after.State), not Installed" }
             $env:BUN_NATIVE_IME_INPUT = (Resolve-Path 'tests/native/windows-input-oracle.ps1').Path
           }
           $package = Join-Path $env:NATIVE_EVIDENCE 'ime-platform-package'
