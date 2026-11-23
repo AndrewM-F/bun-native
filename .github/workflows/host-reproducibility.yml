@@ -8,6 +8,11 @@ name: Native host reproducibility
 # is deliberately not scheduled: six cold Rust builds are expensive.
 on:
   workflow_dispatch:
+    inputs:
+      compare-windows-images:
+        description: Compare Windows 2022 and 2025 hosted images (diagnostic)
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
     # `ready_for_review` only: pushes to a ready PR do not start six cold builds.
@@ -27,7 +32,7 @@ jobs:
   build:
     name: Build host (${{ matrix.name }}, attempt ${{ matrix.attempt }})
     if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.name == 'windows' && matrix.attempt == 'b' && github.event_name == 'workflow_dispatch' && inputs.compare-windows-images && 'windows-2025' || matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -128,6 +133,12 @@ jobs:
           }
           if ($IsWindows) {
             $tools += '--tool', "fxc=$env:GPUI_FXC_PATH"
+            $tools += '--tool', "fxc-sha256=$((Get-FileHash -Algorithm SHA256 $env:GPUI_FXC_PATH).Hash.ToLowerInvariant())"
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+            if (!(Test-Path -LiteralPath $vswhere)) { throw 'Visual Studio discovery tool is unavailable' }
+            $visualStudio = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or !$visualStudio) { throw 'Visual Studio C++ toolchain is unavailable' }
+            $tools += '--tool', "visual-studio=$($visualStudio.installationVersion) $($visualStudio.installationPath)"
           }
           bun scripts/quality/host-reproducibility.ts record `
             --host $host_path --archive $archive `
