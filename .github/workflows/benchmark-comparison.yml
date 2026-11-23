@@ -256,6 +256,26 @@ jobs:
             if (Test-Path 'D:\b') { Move-Item 'D:\b' $source }
             if (Test-Path 'D:\w') { Move-Item 'D:\w' $webkit }
           }
+      - name: Retain targeted linker inputs after a build failure
+        if: ${{ failure() }}
+        run: |
+          $root = Join-Path $env:GITHUB_WORKSPACE 'bun-source/build/release-local'
+          $evidence = Join-Path $env:RUNNER_TEMP 'runtime-link-inputs'
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          $paths = @(
+            'build.ninja', 'bun-profile.exe.rsp', 'bun-profile.exe.lazy.rsp',
+            'obj/vendor/WebKit/Source/WTF/wtf/bun/RunLoopBun.cpp.obj',
+            'obj/deps/WebKit/JavaScriptCore/DerivedSources/unified-sources/UnifiedSource-runtime-28.cpp.obj'
+          )
+          foreach ($path in $paths) {
+            $inputPath = Join-Path $root $path
+            if (Test-Path -LiteralPath $inputPath -PathType Leaf) {
+              $target = Join-Path $evidence $path
+              New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+              Copy-Item -LiteralPath $inputPath -Destination $target
+              Get-FileHash -Algorithm SHA256 -LiteralPath $inputPath | Format-List | Out-File -Append (Join-Path $evidence 'hashes.txt')
+            }
+          }
       - name: Retain built runtime
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -264,6 +284,7 @@ jobs:
           path: |
             bun-source/build/release-local/bun.exe
             ${{ runner.temp }}/runtime-build-adjustments.json
+            ${{ runner.temp }}/runtime-link-inputs/
           if-no-files-found: warn
           retention-days: 7
 
