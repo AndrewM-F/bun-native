@@ -1070,6 +1070,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'The screen-reader AOT compiler or inspection failed' }
           $manifest = Get-Content -Raw (Join-Path $package 'manifest.json') | ConvertFrom-Json
           try {
+            $failedModes = @()
             foreach ($mode in @('development', 'aot')) {
               $evidence = Join-Path $env:NATIVE_EVIDENCE "screen-reader-$mode"
               New-Item -ItemType Directory $evidence | Out-Null
@@ -1081,12 +1082,19 @@ jobs:
                 & (Join-Path $package $manifest.application.file) 2>&1 |
                   Tee-Object -FilePath (Join-Path $evidence 'run.log')
               }
-              if ($LASTEXITCODE -ne 0) { throw "${{ runner.os }} $mode screen-reader qualification failed" }
+              if ($LASTEXITCODE -ne 0) {
+                if ($IsWindows -and $env:BUN_NATIVE_NVDA_EVENT_DEBUG -eq 'true') {
+                  $failedModes += $mode
+                  continue
+                }
+                throw "${{ runner.os }} $mode screen-reader qualification failed"
+              }
               $report = Get-Content -Raw (Join-Path $evidence 'result.json') | ConvertFrom-Json
               if ($report.status -ne 'passed' -or $report.mode -ne $mode) {
                 throw "${{ runner.os }} $mode screen-reader evidence does not record a pass"
               }
             }
+            if ($failedModes.Count -gt 0) { throw "Windows screen-reader qualification failed: $($failedModes -join ', ')" }
           } finally {
             # Never leave a screen reader running into later steps.
             if ($IsMacOS) {
