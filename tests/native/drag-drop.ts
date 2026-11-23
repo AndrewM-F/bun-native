@@ -161,6 +161,16 @@ function layout(window: NativeWindow): Promise<Layout> {
  */
 const dragTracePath = (stage: string) => join(output, `drag-trace-${process.pid}-${stage}.json`)
 const dragTrace = backend === 'appkit' ? dragTracePath('qualification') : undefined
+const dragEvidencePath = (stage: string) =>
+  join(output, `drag-appkit-${process.pid}-${stage}.jsonl`)
+function configureDragEvidence(stage: string) {
+  if (backend !== 'appkit') return
+  process.env['BUN_NATIVE_EVIDENCE_LOG'] = dragEvidencePath(stage)
+  process.env['BUN_NATIVE_EVIDENCE_NONCE'] = `drag-${process.pid}-${stage}`
+  process.env['BUN_NATIVE_STARTUP_TRACE'] = '1'
+  process.env['BUN_NATIVE_STARTUP_LOG'] = '1'
+  process.env['BUN_NATIVE_STARTUP_LOG_DRAG_ONLY'] = '1'
+}
 function dragTraceEvidence(): unknown {
   if (dragTrace === undefined || !existsSync(dragTrace)) return null
   try {
@@ -615,15 +625,38 @@ async function rawHandles() {
 
 try {
   // Each host creates its trace exclusively; reuse would hide later evidence.
+  configureDragEvidence('denial')
   if (dragTrace !== undefined) process.env['BUN_NATIVE_PHASE_TRACE'] = dragTracePath('denial')
   await deniedByDefault()
+  configureDragEvidence('qualification')
   if (dragTrace !== undefined) process.env['BUN_NATIVE_PHASE_TRACE'] = dragTrace
   const targets = await qualification()
+  if (backend === 'appkit') {
+    const records = readFileSync(dragEvidencePath('qualification'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { phase?: string; target?: string; message?: string })
+    const entries = records.filter((entry) => entry.target === 'bun_native::drag_entry')
+    assert.ok(!records.some((entry) => entry.phase === 'record_limit'), 'drag evidence is complete')
+    assert.ok(
+      entries.some((entry) => entry.message === 'callback_entered'),
+      'AppKit callback observed'
+    )
+    assert.ok(
+      entries.some((entry) => entry.message === 'filename_count=1'),
+      'one-file control observed'
+    )
+    assert.ok(
+      entries.some((entry) => entry.message === 'filename_count=65'),
+      '65-file offer observed'
+    )
+  }
   assert.deepEqual(
     targets.map((target) => target.active),
     [false, false, false]
   )
   record('shutdownRevokes', { active: 0 })
+  configureDragEvidence('raw-handles')
   if (dragTrace !== undefined) process.env['BUN_NATIVE_PHASE_TRACE'] = dragTracePath('raw-handles')
   await rawHandles()
   if (dragTrace !== undefined) {
