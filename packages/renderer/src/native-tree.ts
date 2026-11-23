@@ -41,6 +41,28 @@ function same(left: unknown, right: unknown): boolean {
 
 const noChildren: readonly Node[] = Object.freeze([])
 
+// For one non-adjacent exchange, the unchanged middle is the unique longest
+// subsequence when the exchanged span has at least four children.
+function swappedChildren(
+  current: readonly Node[],
+  desired: readonly Node[]
+): Uint8Array | undefined {
+  if (current.length !== desired.length) return undefined
+  let start = 0
+  let end = current.length
+  while (start < end && current[start] === desired[start]) start += 1
+  while (end > start && current[end - 1] === desired[end - 1]) end -= 1
+  if (end - start < 4 || current[start] !== desired[end - 1] || current[end - 1] !== desired[start])
+    return undefined
+  for (let index = start + 1; index < end - 1; index += 1)
+    if (current[index] !== desired[index]) return undefined
+  const stable = new Uint8Array(desired.length)
+  stable.fill(1)
+  stable[start] = 0
+  stable[end - 1] = 0
+  return stable
+}
+
 function updateInput(
   window: NativeWindow,
   batch: NativeBatch,
@@ -258,7 +280,14 @@ export async function commitNativeTree(
         continue
       }
       const siblings = editChildren(parent)
-      const stable = stableChildren(siblings, state.children)
+      // The extra scan pays off on wide interior exchanges; keep narrow lists
+      // and changes at either end on the ordinary ordering path.
+      const stable =
+        (siblings.length >= 256 &&
+        siblings[0] === state.children[0] &&
+        siblings[siblings.length - 1] === state.children[state.children.length - 1]
+          ? swappedChildren(siblings, state.children)
+          : undefined) ?? stableChildren(siblings, state.children)
       // `before` tracks the anchor's working index from the end; it only moves
       // left, so locating stable anchors costs O(children) for the whole list.
       let before = siblings.length
