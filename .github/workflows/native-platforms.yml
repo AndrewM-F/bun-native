@@ -1135,7 +1135,9 @@ jobs:
             $languagePath = Join-Path $env:NATIVE_EVIDENCE 'windows-ime-languages-after.json'
             powershell.exe -NoProfile -NonInteractive -Command $languageSetup | Out-File $languagePath
             if ($LASTEXITCODE -ne 0) { throw 'Could not configure the hosted Korean user language' }
-            $languagesAfter = @(Get-Content -Raw $languagePath | ConvertFrom-Json)
+            $languageOutput = @(Get-Content $languagePath)
+            if ($languageOutput.Count -eq 0) { throw 'Language setup produced no output' }
+            $languagesAfter = @($languageOutput[-1] | ConvertFrom-Json)
             if ($languagesAfter -notcontains 'ko-KR') { throw 'Korean is missing from the user language list' }
             $env:BUN_NATIVE_IME_INPUT = (Resolve-Path 'tests/native/windows-input-oracle.ps1').Path
           }
