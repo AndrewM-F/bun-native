@@ -13,14 +13,23 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Node {
     element: Arc<Element>,
     parent: Option<NodeId>,
-    // Shared like `element`: a write copies its node, so a child list is
-    // copied only when that batch actually reorders it.
-    children: Arc<Vec<NodeId>>,
+    // Leaf nodes need no allocation. A populated list stays shared until a
+    // transaction changes it, preserving isolation from the committed tree.
+    children: Option<Arc<Vec<NodeId>>>,
     input_revision: Option<u64>,
+}
+
+impl PartialEq for Node {
+    fn eq(&self, other: &Self) -> bool {
+        self.element == other.element
+            && self.parent == other.parent
+            && self.children() == other.children()
+            && self.input_revision == other.input_revision
+    }
 }
 
 impl Node {
@@ -28,7 +37,10 @@ impl Node {
         &self.element
     }
     pub fn children(&self) -> &[NodeId] {
-        &self.children
+        self.children.as_deref().map_or(&[], Vec::as_slice)
+    }
+    fn children_mut(&mut self) -> &mut Vec<NodeId> {
+        Arc::make_mut(self.children.get_or_insert_with(Arc::default))
     }
     pub fn input_revision(&self) -> Option<u64> {
         self.input_revision
@@ -135,7 +147,7 @@ impl Tree {
                     style: Style::default(),
                 }),
                 parent: None,
-                children: Arc::default(),
+                children: None,
                 input_revision: None,
             },
         );
@@ -189,7 +201,12 @@ impl Tree {
         self.nodes.diff(
             &previous.nodes,
             &|old, new| {
-                Arc::ptr_eq(&old.element, &new.element) && Arc::ptr_eq(&old.children, &new.children)
+                Arc::ptr_eq(&old.element, &new.element)
+                    && match (&old.children, &new.children) {
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        (None, None) => true,
+                        _ => false,
+                    }
             },
             &mut visit,
         );
@@ -341,7 +358,7 @@ impl Tree {
                         Node {
                             element: Arc::new(element),
                             parent: None,
-                            children: Arc::default(),
+                            children: None,
                             input_revision,
                         },
                     );
@@ -461,7 +478,7 @@ impl Tree {
                 }
                 _ => outer,
             };
-            pending.extend(node.children.iter().rev().map(|child| (*child, depth)));
+            pending.extend(node.children().iter().rev().map(|child| (*child, depth)));
         }
         active.map(|(_, id)| id)
     }
@@ -579,13 +596,11 @@ impl Tree {
             // An existing parent-child edge cannot introduce a cycle. A move
             // within one parent shifts only the children between its old and
             // new places, not the whole list twice.
-            let children = Arc::make_mut(
-                &mut self
-                    .nodes
-                    .get_mut(parent_id)
-                    .ok_or_else(invalid_handle)?
-                    .children,
-            );
+            let children = self
+                .nodes
+                .get_mut(parent_id)
+                .ok_or_else(invalid_handle)?
+                .children_mut();
             if index >= children.len() {
                 return Err(error(
                     ErrorCode::InvalidCommand,
@@ -601,7 +616,7 @@ impl Tree {
             return Ok(());
         }
         // A leaf cannot be an ancestor of another node in the valid tree.
-        if child_id == parent_id || !child.children.is_empty() {
+        if child_id == parent_id || !child.children().is_empty() {
             let mut ancestor = Some(parent_id);
             while let Some(id) = ancestor {
                 if id == child_id {
@@ -614,22 +629,18 @@ impl Tree {
             }
         }
         if let Some(old_parent) = old_parent {
-            let siblings = Arc::make_mut(
-                &mut self
-                    .nodes
-                    .get_mut(old_parent)
-                    .ok_or_else(invalid_handle)?
-                    .children,
-            );
+            let siblings = self
+                .nodes
+                .get_mut(old_parent)
+                .ok_or_else(invalid_handle)?
+                .children_mut();
             siblings.remove(position(siblings, child_id)?);
         }
-        let children = Arc::make_mut(
-            &mut self
-                .nodes
-                .get_mut(parent_id)
-                .ok_or_else(invalid_handle)?
-                .children,
-        );
+        let children = self
+            .nodes
+            .get_mut(parent_id)
+            .ok_or_else(invalid_handle)?
+            .children_mut();
         if index > children.len() {
             return Err(error(
                 ErrorCode::InvalidCommand,
@@ -653,20 +664,18 @@ impl Tree {
         }
         let parent = self.nodes.get(node_id).ok_or_else(invalid_handle)?.parent;
         if let Some(parent) = parent {
-            let siblings = Arc::make_mut(
-                &mut self
-                    .nodes
-                    .get_mut(parent)
-                    .ok_or_else(invalid_handle)?
-                    .children,
-            );
+            let siblings = self
+                .nodes
+                .get_mut(parent)
+                .ok_or_else(invalid_handle)?
+                .children_mut();
             siblings.remove(position(siblings, node_id)?);
         }
         let mut pending = vec![node_id];
         while let Some(id) = pending.pop() {
             let node = self.nodes.remove(id).ok_or_else(invalid_handle)?;
             self.text_bytes -= node.element.text_bytes();
-            pending.extend(node.children.iter().copied());
+            pending.extend(node.children().iter().copied());
         }
         Ok(())
     }
@@ -720,7 +729,7 @@ impl Tree {
             }
             if let Some(parent) = layers.first() {
                 let parent = self.nodes.get(*parent).ok_or_else(invalid_handle)?;
-                if parent.children.len() > parent.element.max_children() {
+                if parent.children().len() > parent.element.max_children() {
                     return Err(split_panes());
                 }
             }
@@ -733,7 +742,7 @@ impl Tree {
                     let node = self.nodes.get(id).ok_or_else(invalid_handle)?;
                     let (overlays, popup) = check_node(node, overlays, popup)?;
                     pending.extend(
-                        node.children
+                        node.children()
                             .iter()
                             .map(|child| (*child, depth + 1, overlays, popup)),
                     );
@@ -778,7 +787,7 @@ impl Tree {
                 ));
             }
             pending.extend(
-                node.children
+                node.children()
                     .iter()
                     .map(|child| (*child, Some(id), depth + 1, overlays, popup)),
             );
@@ -801,7 +810,7 @@ fn split_panes() -> ModelError {
 /// nesting and popup content. Returns the overlay layers and popup flag its
 /// children inherit.
 fn check_node(node: &Node, overlays: usize, popup: bool) -> Result<(usize, bool), ModelError> {
-    if node.children.len() > node.element.max_children() {
+    if node.children().len() > node.element.max_children() {
         return Err(split_panes());
     }
     let overlays = overlays + usize::from(matches!(*node.element, Element::Overlay { .. }));

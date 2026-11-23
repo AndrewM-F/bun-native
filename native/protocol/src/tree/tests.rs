@@ -555,11 +555,13 @@ fn aggregate_text_budget_bounds_batches_and_native_edits() {
 #[test]
 fn preflight_shares_child_lists_until_a_batch_reorders_them() {
     let tree = populated();
-    let shared = |left: &Tree, right: &Tree, node: u64| {
-        Arc::ptr_eq(
-            &left.node(id(node)).unwrap().children,
-            &right.node(id(node)).unwrap().children,
-        )
+    let shared = |left: &Tree, right: &Tree, node: u64| match (
+        &left.node(id(node)).unwrap().children,
+        &right.node(id(node)).unwrap().children,
+    ) {
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        (None, None) => true,
+        _ => false,
     };
     let edited = tree
         .prepare(1, vec![set(3, text("b"), None)], 4)
@@ -570,6 +572,16 @@ fn preflight_shares_child_lists_until_a_batch_reorders_them() {
     assert!(shared(&edited, &moved, 1) && !shared(&edited, &moved, 2));
     assert_eq!(edited.node(id(2)).unwrap().children(), &[id(3), id(4)]);
     assert_eq!(moved.node(id(2)).unwrap().children(), &[id(4), id(3)]);
+}
+
+#[test]
+fn absent_and_allocated_empty_child_lists_are_equal() {
+    let original = Tree::new(id(1));
+    let absent = original.node(id(1)).unwrap();
+    let mut allocated = absent.clone();
+    allocated.children = Some(Arc::default());
+    assert_eq!(*absent, allocated);
+    assert_eq!(absent.children(), allocated.children());
 }
 
 #[test]

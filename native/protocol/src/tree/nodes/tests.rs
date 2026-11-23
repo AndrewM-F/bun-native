@@ -13,7 +13,7 @@ fn node(label: u64) -> Node {
             style: Style::default(),
         }),
         parent: None,
-        children: Arc::default(),
+        children: None,
         input_revision: Some(label),
     }
 }
