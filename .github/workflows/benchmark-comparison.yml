@@ -22,6 +22,7 @@ on:
             'runtime-build',
             'runtime-compare',
             'runtime-link-control',
+            'runtime-link-inspect',
           ]
         default: 'none'
       runtime-build-run:
@@ -71,6 +72,65 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  windows-runtime-link-inspect:
+    name: Inspect retained Windows runtime linker inputs
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-link-inspect'
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install verified LLVM 23.1.1
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'llvm-23.1.1.msi'
+          Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-win64.msi' -OutFile $installer
+          if ((Get-FileHash -Algorithm SHA256 $installer).Hash -ne '11af43ba261a1158090dd6f0da40d7a34f32dbfb4a76b43240bffa1ebb140984') { throw 'LLVM installer digest mismatch' }
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', $installer, '/qn', '/norestart') -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "LLVM installer failed: $($install.ExitCode)" }
+      - name: Inspect the retained failed-build objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -notmatch '^[0-9]+$') { throw 'runtime-build-run must be a numeric run ID' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headBranch,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'failure' -or $run.event -ne 'workflow_dispatch' -or $run.headBranch -ne $env:GITHUB_REF_NAME -or $run.workflowName -ne 'Benchmark comparison') { throw 'Expected a failed source-build dispatch from this branch' }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RUNTIME_BUILD_RUN/jobs" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or @($jobs.jobs | Where-Object { $_.name -eq 'Build pinned Windows runtime from source' -and $_.conclusion -eq 'failure' }).Count -ne 1) { throw 'Expected exactly one failed source-build job' }
+          $root = Join-Path $env:RUNNER_TEMP 'runtime-link-inspection'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'source-run.json')
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-uninstrumented-source-runtime --dir (Join-Path $root 'inputs')
+          if ($LASTEXITCODE -ne 0) { throw 'Failed-build artifact download failed' }
+          foreach ($name in @('RunLoopBun.cpp.obj', 'UnifiedSource-runtime-28.cpp.obj')) {
+            $object = @(Get-ChildItem (Join-Path $root 'inputs') -File -Recurse -Filter $name)
+            if ($object.Count -ne 1) { throw "Expected one $name" }
+            Get-FileHash -Algorithm SHA256 $object[0].FullName | Format-List | Out-File (Join-Path $root "$name.hash.txt")
+            & 'C:\Program Files\LLVM\bin\llvm-nm.exe' --format=posix $object[0].FullName > (Join-Path $root "$name.symbols.txt")
+            if ($LASTEXITCODE -ne 0) { throw "Symbol inspection failed: $name" }
+            & 'C:\Program Files\LLVM\bin\llvm-dis.exe' $object[0].FullName -o (Join-Path $root "$name.ll")
+            if ($LASTEXITCODE -ne 0) { throw "Bitcode inspection failed: $name" }
+            Select-String -Path (Join-Path $root "$name.ll") -Pattern 'WTFTimer__update' | Out-File (Join-Path $root "$name.timer.txt")
+          }
+      - name: Retain inspection and input identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-runtime-link-inspection
+          path: |
+            ${{ runner.temp }}/runtime-link-inspection/
+            !${{ runner.temp }}/runtime-link-inspection/**/*.ll
+            !${{ runner.temp }}/runtime-link-inspection/inputs/**/*.obj
+          if-no-files-found: warn
+          retention-days: 30
+
   windows-runtime-link-control:
     name: Windows weak timer symbol link control
     if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-link-control' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
