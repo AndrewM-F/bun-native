@@ -206,6 +206,10 @@ On macOS each case runs again ending with SIGINT to the application's process gr
 
 This step is a fresh-clone-equivalent run: each job starts from a fresh `actions/checkout`, installs the pinned Bun with `node scripts/install-bun.mjs`, runs `bun install --frozen-lockfile` (from a restored download cache) and builds the release host with Cargo before the templates run. It records `bootstrap-environment.json` and `toolchain.txt` beside the template results. The runners are GitHub-hosted virtual machines (`macos-15` arm64, `windows-2022` x64) with software or paravirtual GPUs, not physical machines. Their input is injected by the OS APIs, not from a physical mouse, and a paint record is not a screenshot or proof of display presentation. A passing step on a run is the evidence for that run's commit; read the step result before citing it.
 
+### Windows x64, fresh clone
+
+The [Windows clean-clone run 45224098614](https://github.com/AndrewM-F/bun-native/actions/runs/45224098614) cloned and checked out tested merge `c5e05888aa039dc635571840c9b5f469de7bd4b6` into a new directory, installed the pinned Bun and locked packages, and built the release host with `bun run native:build` without restoring target outputs. On a hosted `windows-2022` VM, the generated Solid and React TypeScript apps passed source checks, inspected AOT builds, development and AOT window runs, one injected OS click, native paint checks and OS close with clean shutdown. The artifact retains source and tool identities, the host hash and each run's reports and logs. This does not establish physical input, physical GPU behavior or display presentation; it does not claim an empty machine-wide download cache.
+
 ## Continue developing
 
 Use the [public API reference](api-reference.md), the [public core API](../packages/core/README.md), [native layout contract](native-layout.md) and [compatibility guide](compatibility.md) when extending an app. Framework contributors should also read the [architecture](architecture.md), [engineering-quality policy](engineering-quality.md), [testing guide](testing.md) and [implementation handoff](records/bun-native-handoff.md).

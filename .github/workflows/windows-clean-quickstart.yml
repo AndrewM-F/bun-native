@@ -1,0 +1,104 @@
+name: Windows clean-clone quick-start
+
+# Manual and workflow-change qualification: no compiled target output is
+# restored. The separate clone follows the documented build/create/dev/build
+# path and uses the existing input and paint oracle. Physical GPUs are not tested.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize]
+    paths: [.github/workflows/windows-clean-quickstart.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_INCREMENTAL: 0
+      PYTHONDONTWRITEBYTECODE: 1
+      QUICKSTART_CLONE: ${{ github.workspace }}/bun-native-clean-clone
+      QUICKSTART_EVIDENCE: ${{ github.workspace }}/windows-clean-quickstart
+      QUICKSTART_PR: ${{ github.event.pull_request.number || '' }}
+    steps:
+      - name: Clone the exact source into a new directory
+        run: |
+          New-Item -ItemType Directory -Path $env:QUICKSTART_EVIDENCE | Out-Null
+          if (Test-Path -LiteralPath $env:QUICKSTART_CLONE) { throw 'Clone destination already exists' }
+          $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git"
+          git clone --filter=blob:none --no-checkout $url $env:QUICKSTART_CLONE
+          if ($LASTEXITCODE -ne 0) { throw 'Clean clone failed' }
+          if ($env:QUICKSTART_PR) {
+            git -C $env:QUICKSTART_CLONE fetch origin "refs/pull/$env:QUICKSTART_PR/merge"
+            if ($LASTEXITCODE -ne 0) { throw 'Pull request merge ref fetch failed' }
+          }
+          git -C $env:QUICKSTART_CLONE checkout --detach $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Exact source checkout failed' }
+          $revision = git -C $env:QUICKSTART_CLONE rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $revision -ne $env:GITHUB_SHA) { throw 'Clone revision mismatch' }
+          $dirty = @(git -C $env:QUICKSTART_CLONE status --porcelain)
+          if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Clone is not clean' }
+          @{ commit = $revision; image = "$env:ImageOS $env:ImageVersion"; clean = $true } |
+            ConvertTo-Json | Out-File (Join-Path $env:QUICKSTART_EVIDENCE 'clone.json')
+      - name: Install the pinned Bun and identify the Windows SDK
+        working-directory: ${{ env.QUICKSTART_CLONE }}
+        run: |
+          node scripts/install-bun.mjs --destination (Join-Path $env:RUNNER_TEMP 'quickstart-bun')
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Bun install failed' }
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem -Directory $sdk |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+          if (!$fxc) { throw 'Windows SDK shader compiler is unavailable' }
+          "GPUI_FXC_PATH=$fxc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Get-FileHash -Algorithm SHA256 $fxc | Format-List | Out-File (Join-Path $env:QUICKSTART_EVIDENCE 'fxc.txt')
+      - name: Install locked dependencies and build the host from source
+        working-directory: ${{ env.QUICKSTART_CLONE }}
+        run: |
+          if (Test-Path -LiteralPath 'target') { throw 'Fresh clone already has build outputs' }
+          bun --revision | Tee-Object -FilePath (Join-Path $env:QUICKSTART_EVIDENCE 'bun.txt')
+          rustc --version --verbose | Out-File (Join-Path $env:QUICKSTART_EVIDENCE 'rust.txt')
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Locked install failed' }
+          bun run native:build
+          if ($LASTEXITCODE -ne 0) { throw 'Documented native host build failed' }
+          $hostPath = (Resolve-Path 'target/release/bun-native-host.exe').Path
+          Get-FileHash -Algorithm SHA256 $hostPath | Format-List | Out-File (Join-Path $env:QUICKSTART_EVIDENCE 'host.txt')
+      - name: Create, check, build and exercise generated applications
+        working-directory: ${{ env.QUICKSTART_CLONE }}
+        timeout-minutes: 20
+        run: |
+          $packages = Join-Path $env:QUICKSTART_EVIDENCE 'packages'
+          $hostPath = (Resolve-Path 'target/release/bun-native-host.exe').Path
+          python tests/native/cli-templates.py prepare --output $packages --bun (Get-Command bun).Source --host $hostPath
+          if ($LASTEXITCODE -ne 0) { throw 'Template create, check or inspected AOT build failed' }
+          $failed = @()
+          foreach ($case in @('solid-typescript', 'react-typescript')) {
+            foreach ($mode in @('development', 'aot')) {
+              python tests/native/cli-templates-platform.py --packages $packages --case $case --mode $mode --close os `
+                --output (Join-Path $env:QUICKSTART_EVIDENCE "$case-$mode")
+              if ($LASTEXITCODE -ne 0) { $failed += "$case $mode (exit $LASTEXITCODE)" }
+            }
+          }
+          if ($failed.Count -gt 0) { throw "Quick-start windows failed: $($failed -join ', ')" }
+      - name: Retain qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-clean-clone-quickstart
+          path: |
+            ${{ env.QUICKSTART_EVIDENCE }}/
+            !${{ env.QUICKSTART_EVIDENCE }}/packages/**/package/**
+            !${{ env.QUICKSTART_EVIDENCE }}/packages/**/source/**
+          if-no-files-found: warn
+          retention-days: 30
