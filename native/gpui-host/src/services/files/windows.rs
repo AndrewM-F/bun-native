@@ -551,6 +551,15 @@ mod tests {
         assert!(probe());
     }
 
+    #[test]
+    fn modified_time_floors_submillisecond_filetime_ticks() {
+        let milliseconds = 1_700_000_000_000_i64;
+        let base = UNIX_EPOCH_TICKS + milliseconds * 10_000;
+        assert_eq!(modified_ms(base + 9_999), milliseconds);
+        assert_eq!(modified_ms(base + 10_000), milliseconds + 1);
+        assert_eq!(modified_ms(UNIX_EPOCH_TICKS - 1), -1);
+    }
+
     /// Requests stay beneath the grant without following any reparse point.
     #[test]
     fn confinement() {

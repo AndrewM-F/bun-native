@@ -805,6 +805,9 @@ moves, so FIFOs and devices are never opened for I/O.
 | `remove(path)`           | Removes a file, link or empty directory                                                          |
 | `close()`                | Idempotent; revokes locally first, then closes the native descriptor                             |
 
+`modifiedMs` is a whole number of milliseconds since the Unix epoch, rounded
+toward negative infinity when the filesystem records a finer timestamp.
+
 Writes, `createDirectory` and `remove` need a `read_write` grant; the host
 enforces that before any I/O. Failures are `NativeServiceError` with service
 `filesystem_grants` and a code: `permission_denied`, `not_found`,

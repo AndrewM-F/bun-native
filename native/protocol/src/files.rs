@@ -271,7 +271,7 @@ pub enum FileResult {
         file_kind: FileKind,
         #[serde(deserialize_with = "crate::wire::safe_integer")]
         size: u64,
-        /// Milliseconds since the Unix epoch; negative before it.
+        /// Whole milliseconds since the Unix epoch, rounded toward negative infinity.
         modified_ms: i64,
     },
     /// Entries sorted by name after `after`. `omitted` counts names in this

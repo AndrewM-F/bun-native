@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test'
-import { parseFiletimeEvidence, windowsFiletimeEvidence } from '../native/windows-filetime.ts'
+import {
+  parseFiletimeEvidence,
+  setWindowsFiletime,
+  windowsFiletimeEvidence,
+} from '../native/windows-filetime.ts'
 
 test('Windows FILETIME evidence accepts only bounded unsigned decimal ticks', () => {
   expect(parseFiletimeEvidence(' 116444736000000000\n')).toBe('116444736000000000')
@@ -34,6 +38,30 @@ test('failure evidence passes the path as data and never masks the original fail
   expect(
     windowsFiletimeEvidence(path, 'win32', () => ({ success: true, stdout: Buffer.alloc(65) }))
   ).toBeNull()
+})
+
+test('boundary timestamp setting passes file and ticks as data and rejects invalid inputs', () => {
+  const path = 'C:\\private directory\\fixture.txt'
+  const ticks = '133444736000009999'
+  expect(
+    setWindowsFiletime(path, ticks, 'win32', (command, env) => {
+      expect(command.join(' ')).not.toContain(path)
+      expect(env['BUN_NATIVE_MTIME_EVIDENCE_PATH']).toBe(path)
+      expect(env['BUN_NATIVE_MTIME_TICKS']).toBe(ticks)
+      return { success: true, stdout: new Uint8Array() }
+    })
+  ).toBe(true)
+  for (const invalid of ['', '-1', '01', '2650467744000000000'])
+    expect(
+      setWindowsFiletime(path, invalid, 'win32', () => {
+        throw Error('must not run')
+      })
+    ).toBe(false)
+  expect(
+    setWindowsFiletime(path, ticks, 'linux', () => {
+      throw Error('must not run')
+    })
+  ).toBe(false)
 })
 
 test.skipIf(process.platform !== 'win32')(
