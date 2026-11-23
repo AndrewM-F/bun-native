@@ -369,7 +369,7 @@ def main():
                 check=True,
                 timeout=180,
             )
-        inspect = 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); if (!graph.hasCompiledProgram || runtime.jit !== "unused") throw new Error("Not AOT"); console.log(JSON.stringify({graph,runtime},null,2))'
+        inspect = 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); console.log(JSON.stringify({graph,runtime},null,2)); if (!graph.hasCompiledProgram || runtime.jit !== "unused") throw new Error("Not AOT")'
         with (output / f"{variant}-inspection.json").open("wb") as log:
             subprocess.run(
                 [compiler, "-e", inspect, str(binary)],
