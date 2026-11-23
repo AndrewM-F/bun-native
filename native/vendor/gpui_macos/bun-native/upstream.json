@@ -7,7 +7,8 @@
   "patched": ["src/display_link.rs", "src/gpui_macos.rs", "src/window.rs"],
   "patches": {
     "metal-display-link-switch.patch": "36154d704ace986f8d1921985e7daea0089d7d81d01d71da22ede056970b92fc",
-    "cvdisplaylink-keep-subscribed.patch": "305546344c995c329fcf6fd3aa729881ad141aa3739648fad824bed0a6e07021"
+    "cvdisplaylink-keep-subscribed.patch": "305546344c995c329fcf6fd3aa729881ad141aa3739648fad824bed0a6e07021",
+    "drag-entry-diagnostics.patch": "be34235ff40d9d56fb8a91b5856b905309712730c06744cde0e06e2b04fa34e1"
   },
   "files": {
     "Cargo.toml": {
