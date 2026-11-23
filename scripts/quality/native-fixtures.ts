@@ -210,7 +210,7 @@ export const ciCompiles: Record<CiPlatform, Partial<Record<number, readonly Fixt
       'react-platform',
       'filesystem-grants',
       'accessibility-platform',
-      // The experimental Windows screen-reader and IME steps run on main only.
+      // The experimental Windows screen-reader step runs on main only.
       'screen-reader',
       'ime-platform',
       'display-platform',

@@ -19,7 +19,10 @@
  *   or to VoiceOver.
  * - Windows: a portable NVDA with the silence synthesizer, logging every
  *   speech sequence it sends at the input/output log level. Keys come from
- *   SendInput in tests/native/windows-input-oracle.ps1.
+ *   SendInput in tests/native/windows-input-oracle.ps1. An optional independent
+ *   UI Automation tree snapshot records focused controls for diagnosis. An
+ *   optional separate process observes bounded focus-change events. Neither
+ *   replaces the speech assertion; the observer itself can affect timing.
  *
  * Every focus change is also read from public Bun focus events, so a phrase is
  * only accepted after the host actually moved focus. Linux asserts Orca's exact
@@ -56,6 +59,9 @@ const mac = platform === 'darwin'
 // macos-input-oracle. Windows: the absolute path of windows-input-oracle.ps1.
 const driver = linux ? process.env['BUN_NATIVE_ATSPI_PYTHON'] : process.env['BUN_NATIVE_SR_INPUT']
 const nvda = process.env['BUN_NATIVE_NVDA']
+// Optional independent Windows UI Automation focus snapshots for diagnosis.
+const uiaOracle = process.env['BUN_NATIVE_SR_UIA_ORACLE']
+const uiaEvents = process.env['BUN_NATIVE_SR_UIA_EVENTS']
 // macOS: the compiled macos-accessibility-oracle.
 const axOracle = process.env['BUN_NATIVE_A11Y_ORACLE']
 if (
@@ -634,6 +640,27 @@ const LIST_SPEECH = {
 }
 
 const reader: Reader = linux ? new Orca() : mac ? new VoiceOver() : new Nvda()
+function spawnFocusObserver(script: string, output: string, ready: string, stop: string) {
+  return Bun.spawn(
+    [
+      'powershell.exe',
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      script,
+      TITLE,
+      output,
+      ready,
+      stop,
+    ],
+    { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' }
+  )
+}
+let focusObserver: ReturnType<typeof spawnFocusObserver> | undefined
+let focusObserverInfo: Record<string, unknown> | undefined
+const focusObserverStop = join(evidence, 'uia-focus-events.stop')
 let readerInfo: Record<string, unknown> = {}
 const steps: Array<{
   step: string
@@ -643,6 +670,7 @@ const steps: Array<{
   missing?: Expectation
   axFocus?: unknown
   axFocusInterval?: { startMs: number; endMs: number } | undefined
+  uiaFocus?: unknown
 }> = []
 // A step whose expected phrase never came is recorded and the scenario goes on,
 // so one run shows every step a screen reader misses; the run still fails.
@@ -824,9 +852,50 @@ try {
     })
     await Bun.sleep(settle)
     const phrases = reader.utterances().slice(from)
-    if (spoken) steps.push({ step: label, key, focus, phrases, axFocus, axFocusInterval })
+    // Capture only after the speech deadline and settle, so this diagnostic
+    // cannot extend the existing window for a phrase to pass.
+    let uiaFocus: unknown
+    if (platform === 'win32' && focus && uiaOracle && isAbsolute(uiaOracle)) {
+      const startMs = performance.now() - started
+      try {
+        const tree = JSON.parse(
+          await run([
+            'powershell.exe',
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            uiaOracle,
+            'dump',
+            TITLE,
+          ])
+        ) as Array<{ focused?: boolean; role?: string; name?: string }>
+        uiaFocus = {
+          startMs,
+          endMs: performance.now() - started,
+          focused: tree.filter((entry) => entry.focused === true),
+        }
+      } catch (error) {
+        uiaFocus = {
+          startMs,
+          endMs: performance.now() - started,
+          error: String(error).slice(0, 500),
+        }
+      }
+    }
+    if (spoken) steps.push({ step: label, key, focus, phrases, axFocus, axFocusInterval, uiaFocus })
     else {
-      steps.push({ step: label, key, focus, phrases, missing: expected, axFocus, axFocusInterval })
+      steps.push({
+        step: label,
+        key,
+        focus,
+        phrases,
+        missing: expected,
+        axFocus,
+        axFocusInterval,
+        uiaFocus,
+      })
       missed.push({ step: label, expected, phrases })
     }
     console.log(JSON.stringify({ step: label, phrases, spoken, ...(axFocus ? { axFocus } : {}) }))
@@ -849,6 +918,33 @@ try {
     'search',
     per(['entry typed.'], { name: 'typed', role: ROLE.entry })
   )
+  if (platform === 'win32' && uiaEvents && isAbsolute(uiaEvents)) {
+    const output = join(evidence, 'uia-focus-events.tsv')
+    const ready = join(evidence, 'uia-focus-events.ready')
+    const startMs = performance.now() - started
+    try {
+      focusObserver = spawnFocusObserver(uiaEvents, output, ready, focusObserverStop)
+      await waitFor(
+        () => existsSync(ready) || focusObserver?.exitCode !== null,
+        'UIA focus observer',
+        15_000
+      )
+      if (!existsSync(ready)) throw new Error('UIA focus observer exited before registering')
+      focusObserverInfo = {
+        registered: true,
+        startMs,
+        readyMs: performance.now() - started,
+        pid: readFileSync(ready, 'utf8'),
+      }
+    } catch (error) {
+      focusObserverInfo = {
+        registered: false,
+        startMs,
+        endMs: performance.now() - started,
+        error: String(error).slice(0, 500),
+      }
+    }
+  }
   // Keyboard-only Tab order; the disabled button is skipped and never spoken.
   await step(
     'Tab to button',
@@ -1056,6 +1152,21 @@ try {
   assert.deepEqual(missed, [], `${reader.name} said every expected phrase`)
   await window.close()
 } finally {
+  if (focusObserver) {
+    try {
+      writeFileSync(focusObserverStop, 'stop\n')
+      const exit = await Promise.race([focusObserver.exited, Bun.sleep(5_000).then(() => null)])
+      if (exit === null) focusObserver.kill()
+      focusObserverInfo = { ...focusObserverInfo, exit, stoppedMs: performance.now() - started }
+    } catch (error) {
+      try {
+        focusObserver.kill()
+      } catch {
+        // A diagnostic child that already exited needs no cleanup.
+      }
+      focusObserverInfo = { ...focusObserverInfo, stopError: String(error).slice(0, 500) }
+    }
+  }
   writeFileSync(
     join(evidence, 'utterances.json'),
     JSON.stringify(
@@ -1065,6 +1176,7 @@ try {
         steps,
         missed,
         axMissed,
+        uiaFocusObserver: focusObserverInfo,
         ...(reader instanceof VoiceOver ? { voiceOverTiming: reader.timing() } : {}),
       },
       null,

@@ -306,6 +306,7 @@ test('a shard with no batched entries compiles nothing', async () => {
     {}
   )
   expect(excluded.out.trim().split('\n')).toEqual(shardEntries('win32', 2, ['screen-reader']))
+  expect(excluded.out.trim().split('\n')).toContain('ime-platform')
   expect(
     (
       await runTool(['--platform', 'linux', '--shard', '3', '--jobs', '2', '--host', '/h'], {

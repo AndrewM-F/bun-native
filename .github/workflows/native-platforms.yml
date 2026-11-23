@@ -543,8 +543,8 @@ jobs:
         run: |
           $platform = if ($IsWindows) { 'win32' } else { 'darwin' }
           $jobs = if ($IsWindows) { 4 } else { 3 }
-          # Pull requests skip the experimental Windows screen-reader and IME steps.
-          $exclude = '${{ runner.os == 'Windows' && github.event_name == 'pull_request' && 'screen-reader,ime-platform' || '' }}'
+          # Pull requests skip the experimental Windows screen-reader step.
+          $exclude = '${{ runner.os == 'Windows' && github.event_name == 'pull_request' && 'screen-reader' || '' }}'
           bun scripts/quality/compile-aot-entries.ts --platform $platform --shard ${{ matrix.shard }} `
             --jobs $jobs "--exclude=$exclude" --keep-going
           if ($LASTEXITCODE -ne 0) { throw 'The parallel AOT compile could not run' }
@@ -1054,6 +1054,8 @@ jobs:
             $env:BUN_NATIVE_NVDA = Join-Path $nvda '$PLUGINSDIR\app\nvda_noUIAccess.exe'
             if (-not (Test-Path -LiteralPath $env:BUN_NATIVE_NVDA)) { throw 'nvda_noUIAccess.exe is not in the NVDA launcher' }
             $env:BUN_NATIVE_SR_INPUT = (Resolve-Path 'tests/native/windows-input-oracle.ps1').Path
+            $env:BUN_NATIVE_SR_UIA_ORACLE = (Resolve-Path 'tests/native/windows-accessibility-oracle.ps1').Path
+            $env:BUN_NATIVE_SR_UIA_EVENTS = (Resolve-Path 'tests/native/windows-uia-focus-events.ps1').Path
             [ordered]@{ version = '2024.4.2'; sha256 = $hash; signer = $signature.SignerCertificate.Subject } |
               ConvertTo-Json | Out-File (Join-Path $env:NATIVE_EVIDENCE 'nvda-download.json')
           }
@@ -1089,10 +1091,9 @@ jobs:
             }
             $global:LASTEXITCODE = 0
           }
-      - name: macOS and experimental Windows Korean input method composition in development and AOT (#241)
+      - name: macOS and Windows Korean input method composition in development and AOT (#241)
         id: ime-platform
-        if: ${{ matrix.shard == 2 && (runner.os == 'macOS' || github.event_name != 'pull_request') && (!cancelled() && steps.native-build.outcome == 'success') }}
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        if: ${{ matrix.shard == 2 && (!cancelled() && steps.native-build.outcome == 'success') }}
         timeout-minutes: 15
         run: |
           if ($IsMacOS) {
@@ -1117,9 +1118,28 @@ jobs:
               # ("Invalid managed/unmanaged type combination"); ask Windows PowerShell.
               languages = @(powershell.exe -NoProfile -NonInteractive -Command '(Get-WinUserLanguageList).LanguageTag')
             } | ConvertTo-Json | Out-File (Join-Path $env:NATIVE_EVIDENCE 'windows-ime-before.json')
-            if (-not ($tip -and $layout)) {
+            # Registry entries can exist while the corresponding language
+            # capability is absent on the hosted image. Record and test the
+            # installed capability rather than assuming those keys suffice.
+            if (-not ($tip -and $layout) -or $capability.State -ne 'Installed') {
               Add-WindowsCapability -Online -Name 'Language.Basic~~~ko-KR~0.0.1.0' |
                 ConvertTo-Json | Out-File (Join-Path $env:NATIVE_EVIDENCE 'windows-ime-capability.json')
+            }
+            $after = Get-WindowsCapability -Online -Name 'Language.Basic~~~ko-KR~0.0.1.0'
+            [ordered]@{ capability = "$($after.State)" } |
+              ConvertTo-Json | Out-File (Join-Path $env:NATIVE_EVIDENCE 'windows-ime-after.json')
+            if ($after.State -ne 'Installed') { throw "Korean language capability is $($after.State), not Installed" }
+            # The hosted account can still list only en-US after the capability
+            # is installed. Add Korean without removing its existing languages.
+            $languageSetup = '$list = Get-WinUserLanguageList; if (@($list.LanguageTag | Where-Object { $_ -eq ''ko'' -or $_ -like ''ko-*'' }).Count -eq 0) { [void]$list.Add(''ko-KR''); Set-WinUserLanguageList $list -Force | Out-Null }; ConvertTo-Json -InputObject @((Get-WinUserLanguageList).LanguageTag) -Compress'
+            $languagePath = Join-Path $env:NATIVE_EVIDENCE 'windows-ime-languages-after.json'
+            powershell.exe -NoProfile -NonInteractive -Command $languageSetup | Out-File $languagePath
+            if ($LASTEXITCODE -ne 0) { throw 'Could not configure the hosted Korean user language' }
+            $languageOutput = @(Get-Content $languagePath)
+            if ($languageOutput.Count -eq 0) { throw 'Language setup produced no output' }
+            $languagesAfter = @($languageOutput[-1] | ConvertFrom-Json)
+            if (@($languagesAfter | Where-Object { $_ -eq 'ko' -or $_ -like 'ko-*' }).Count -eq 0) {
+              throw 'Korean is missing from the user language list'
             }
             $env:BUN_NATIVE_IME_INPUT = (Resolve-Path 'tests/native/windows-input-oracle.ps1').Path
           }
@@ -1144,15 +1164,14 @@ jobs:
               throw "${{ runner.os }} $mode IME evidence does not record a pass"
             }
           }
-      - name: Report experimental Windows screen-reader and IME outcomes (#241)
+      - name: Report experimental Windows screen-reader outcome (#241)
         if: ${{ matrix.shard == 2 && runner.os == 'Windows' && github.event_name != 'pull_request' && !cancelled() && steps.native-build.outcome == 'success' }}
         run: |
-          foreach ($pair in @(@('screen reader', '${{ steps.screen-reader.outcome }}'), @('IME', '${{ steps.ime-platform.outcome }}'))) {
-            if ($pair[1] -ne 'success') {
-              Write-Output "::warning::Experimental ${{ runner.os }} $($pair[0]) qualification outcome: $($pair[1]) (not gating; see the step log and evidence)"
-            }
-            "- Experimental ${{ runner.os }} $($pair[0]): $($pair[1])" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $outcome = '${{ steps.screen-reader.outcome }}'
+          if ($outcome -ne 'success') {
+            Write-Output "::warning::Experimental ${{ runner.os }} screen reader qualification outcome: $outcome (not gating; see the step log and evidence)"
           }
+          "- Experimental ${{ runner.os }} screen reader: $outcome" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
       - name: Display snapshot, work area, identity and display-change qualification (#299)
         if: ${{ matrix.shard == 2 && (!cancelled() && steps.native-build.outcome == 'success') }}
         timeout-minutes: 8
