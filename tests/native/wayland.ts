@@ -773,6 +773,9 @@ async function accessibilityRows(app: NativeApplication) {
   const MIN_PANE = 100
   const PANES = 600 - 6
   const window = await app.openWindow({ title, width: 640, height: 480 })
+  const focus: string[] = []
+  const names = new Map<NativeNode, string>()
+  window.on(window.root, 'focus', (event) => void focus.push(names.get(event.node) ?? 'other'))
   const nodes = await window.batch((batch) => {
     batch.set(window.root, { kind: 'box', style: { direction: 'column', background: 0xffffff } })
     const add = <N extends NativeNode>(
@@ -817,15 +820,11 @@ async function accessibilityRows(app: NativeApplication) {
       window.root,
       batch.create({ kind: 'button', text: 'Open dialog', style: { height: 40 } })
     )
+    names.set(split, 'divider')
+    names.set(search, 'search')
+    names.set(open, 'open')
     return { split, search, open }
   })
-  const focus: string[] = []
-  const names = new Map<NativeNode, string>([
-    [nodes.split, 'divider'],
-    [nodes.search, 'search'],
-    [nodes.open, 'open'],
-  ])
-  window.on(window.root, 'focus', (event) => void focus.push(names.get(event.node) ?? 'other'))
   const resizes: SplitResizeEvent[] = []
   onSplitResize(window, nodes.split, (event) => void resizes.push(event))
   let dialog:
