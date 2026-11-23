@@ -39,6 +39,10 @@ on:
         description: Record NVDA UIA and MSAA event handling in this diagnostic run
         type: boolean
         default: false
+      nvda-disable-enhanced:
+        description: Disable NVDA enhanced event processing in the debug run only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1024,6 +1028,7 @@ jobs:
         timeout-minutes: 15
         env:
           BUN_NATIVE_NVDA_EVENT_DEBUG: ${{ github.event_name == 'workflow_dispatch' && inputs.nvda-debug && 'true' || 'false' }}
+          BUN_NATIVE_NVDA_DISABLE_ENHANCED: ${{ github.event_name == 'workflow_dispatch' && inputs.nvda-debug && inputs.nvda-disable-enhanced && 'true' || 'false' }}
         run: |
           if ($IsMacOS) {
             bash scripts/quality/macos-voiceover-setup.sh (Join-Path $env:NATIVE_EVIDENCE 'voiceover-setup')
