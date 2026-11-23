@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import {
   handleInputRequest,
   InputSession,
@@ -69,6 +69,32 @@ describe('Electrobun visible-input control', () => {
     ).toBe(200)
     expect((await post('input/finish', nonce)).status).toBe(200)
     expect(finished).toEqual({ nonce, clicks: 1, label: 'Clicked' })
+  })
+
+  test('keeps internal failures out of HTTP responses while retaining local diagnostics', async () => {
+    const diagnostic = new Error('private filesystem detail')
+    const log = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const response = await handleInputRequest(
+        new InputSession(nonce),
+        new Request('http://127.0.0.1/input/ready', {
+          method: 'POST',
+          headers: { 'x-benchmark-nonce': nonce },
+          body: '[640,720]',
+        }),
+        {
+          ready: () => {
+            throw diagnostic
+          },
+          finish: () => {},
+        }
+      )
+      expect(response.status).toBe(409)
+      expect(await response.text()).toBe('Input comparison request failed')
+      expect(log).toHaveBeenCalledWith('Input comparison request failed:', diagnostic)
+    } finally {
+      log.mockRestore()
+    }
   })
 
   test('the GUI smoke driver refuses non-hosted sessions before launching an app', async () => {

@@ -62,7 +62,8 @@ const server = Bun.serve({
             }),
           ])
         } catch (error) {
-          return new Response(String(error), { status: 409, headers })
+          console.error('Input comparison finish failed:', error)
+          return new Response('Input comparison finish failed', { status: 409, headers })
         } finally {
           if (timeout) clearTimeout(timeout)
         }

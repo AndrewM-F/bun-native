@@ -74,6 +74,7 @@ export async function handleInputRequest(
     } else return new Response('not found', { status: 404, headers })
     return new Response('ok', { headers })
   } catch (error) {
-    return new Response(String(error), { status: 409, headers })
+    console.error('Input comparison request failed:', error)
+    return new Response('Input comparison request failed', { status: 409, headers })
   }
 }
