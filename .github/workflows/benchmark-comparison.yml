@@ -342,8 +342,16 @@ jobs:
           nasm --version
           perl --version
           rustc --version --verbose
-          git -C $env:BUN_WEBKIT_PATH rev-parse HEAD
-          git rev-parse HEAD
+          $webkitRevision = git -C $env:BUN_WEBKIT_PATH rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $webkitRevision -ne '4d45755fed4aeef19e95beb90d3d0c884a2812bd') { throw "Unexpected WebKit checkout: $webkitRevision" }
+          $sourceRevision = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $sourceRevision -ne 'b1007f1177fd402fae67387b8548cae5ae9b5707') { throw "Unexpected Bun checkout: $sourceRevision" }
+          Write-Host "Bun source: $sourceRevision; WebKit source: $webkitRevision"
+          # Bun's build script prefers CI commit variables over the checkout.
+          # This step builds Bun, not the repository that dispatched the job.
+          $env:BUILDKITE_COMMIT = $sourceRevision
+          $env:GITHUB_SHA = $sourceRevision
+          $env:GIT_SHA = $sourceRevision
           $aotSources = Join-Path $env:BUN_WEBKIT_PATH 'Source/JavaScriptCore/aot/Sources.txt'
           if ([Array]::IndexOf([IO.File]::ReadAllBytes($aotSources), [byte]13) -ge 0) { throw 'WebKit AOT source list contains CRLF' }
           bun install --frozen-lockfile
