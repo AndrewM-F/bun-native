@@ -89,6 +89,8 @@ These change the host bytes once (and its archive digest). Recheck with [`host-r
 - **Diagnostics** (`build-metrics.json`, compiler logs, package-set `logs/`) are never reproducible, and no hash or claim depends on them.
 - **Signing** adds non-reproducible signatures and timestamps. `release-package.ts sign` keeps each executable's unsigned size and SHA-256 under `verification.signing.files[].unsigned` in `manifest.json` and moves the signed executables and `manifest.json` from `reproducibility.deterministic` to `reproducibility.signed`. Compare the unsigned digests. Installer `.zip` and `.tar.gz` archives are byte-reproducible for equal bundles (`installer-image.test.ts`); disk images are not.
 
+In the Windows jobs of [cross-image run 45204880591](https://github.com/AndrewM-F/bun-native/actions/runs/45204880591), source `8af658dc` produced 11,507,200-byte unsigned hosts with different SHA-256 values: `8b3b099f33d10a8fd35c12af4ad2548f4a827e3ad77fe5e8c70c73fd631680dd` on `windows-2022` and `8ccb40392610b69019145ce3d035d71eb9da96feb34d1af00e672002cf1217b5` on `windows-2025`. The paired records show the same pinned Bun and Rust and shader compiler digest, but different images and discovered Visual Studio installations (17.14 and 18.12). The repository PE comparison, run locally on the retained artifacts, found 1,186,021 differing bytes, including `.text` and `.rdata`. It does not establish which tool or image difference caused them, or prove the discovered installation was the one used to link. The Windows build jobs passed; the differing hashes fail the comparison's Windows gate.
+
 ## Checking a build yourself
 
 ```sh
