@@ -18,6 +18,8 @@ In [the shutdown control](https://github.com/AndrewM-F/bun-native/actions/runs/4
 
 The next diagnostic compares three alternating trials per variant with and without dereferencing the probes at the first checkpoint; each variant also has a separately pinned-root positive control. The collection, queue fence, second checkpoint, and failure assertion are preserved. The omitted observation is a diagnostic alteration, so a passing variant would not pass the original benchmark or identify a root by itself. Its purpose is to test whether the first observation affects the second checkpoint.
 
+In [the first-observation control](https://github.com/AndrewM-F/bun-native/actions/runs/45132519273), all three baseline and all three omit-first development trials retained indexes 3 and 5 at the second checkpoint; all corresponding AOT trials retained listener 299. The separately pinned-root variants retained their pinned root in every trial. Skipping the initial dereference alone did not remove the failure in this headless control; it does not identify the retaining root.
+
 ## Runtime source provenance for the next trace
 
 The older [root-tracing investigation](root-tracing.md) used Bun `da867c60b` and WebKit `8c6c963e3c49fe39942d9625d1fc924128fad26e`; it is historical evidence, not an observation from this Windows runtime. The Windows benchmark uses Bun `b1007f1177fd402fae67387b8548cae5ae9b5707`, whose [build configuration](https://github.com/oven-sh/bun/blob/b1007f1177fd402fae67387b8548cae5ae9b5707/scripts/build/deps/webkit.ts) pins WebKit `4d45755fed4aeef19e95beb90d3d0c884a2812bd`. An instrumented build must match that newer source and its Windows release configuration before its observations can be compared with the failing workload.
