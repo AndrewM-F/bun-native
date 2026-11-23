@@ -299,11 +299,20 @@ jobs:
           if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-force-build') { $adjustArgs += '--force-timer' }
           python benchmarks/retention/shorten-upstream-build.py @adjustArgs
           if ($LASTEXITCODE -ne 0) { throw 'Build adjustment failed' }
+      - name: Download inputs for the partial link
+        if: inputs.retention-diagnostic == 'runtime-rust-relink'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45155613235') { throw 'The partial link requires the identified failed source build' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headBranch,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'failure' -or $run.headBranch -ne $env:GITHUB_REF_NAME -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected failed source-build identity' }
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-uninstrumented-source-runtime --dir (Join-Path $env:RUNNER_TEMP 'runtime-rust-relink-inputs')
+          if ($LASTEXITCODE -ne 0) { throw 'Failed-build input download failed' }
       - name: Build source runtime with adjusted codegen paths and release LTO
         env:
           RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
-          GH_TOKEN: ${{ github.token }}
-          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
         run: |
           $source = Join-Path $env:GITHUB_WORKSPACE 'bun-source'
           $webkit = Join-Path $env:GITHUB_WORKSPACE 'webkit-source'
@@ -345,14 +354,9 @@ jobs:
             rustc --version --verbose | Out-File (Join-Path $evidence 'rust-version.txt')
             if ($LASTEXITCODE -ne 0) { throw 'Rust compiler identity failed' }
             if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-rust-relink') {
-              if ($env:RUNTIME_BUILD_RUN -ne '45155613235') { throw 'The partial link requires the identified failed source build' }
-              $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headBranch,event,workflowName | ConvertFrom-Json
-              if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'failure' -or $run.headBranch -ne $env:GITHUB_REF_NAME -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected failed source-build identity' }
-              gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-uninstrumented-source-runtime --dir (Join-Path $evidence 'inputs')
-              if ($LASTEXITCODE -ne 0) { throw 'Failed-build input download failed' }
               $objects = @()
               foreach ($item in @(@('RunLoopBun.cpp.obj', '94b196204805f39566f1d1a06df18baec8755458577a45fe72b8d6fff6379011'), @('UnifiedSource-runtime-28.cpp.obj', '2e25b5e0a68babc3750d70b33325cfd3cabf08a2ef325a95606b441cc72a63a7'))) {
-                $found = @(Get-ChildItem (Join-Path $evidence 'inputs') -File -Recurse -Filter $item[0])
+                $found = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'runtime-rust-relink-inputs') -File -Recurse -Filter $item[0])
                 if ($found.Count -ne 1 -or (Get-FileHash -Algorithm SHA256 $found[0].FullName).Hash -ne $item[1]) { throw 'Retained object identity mismatch' }
                 $objects += $found[0].FullName
               }
