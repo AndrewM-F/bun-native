@@ -35,6 +35,18 @@ on:
         description: Run the independent Windows FILETIME rounding control only
         type: boolean
         default: false
+      nvda-debug:
+        description: Record NVDA UIA and MSAA event handling in this diagnostic run
+        type: boolean
+        default: false
+      nvda-disable-enhanced:
+        description: Disable NVDA enhanced event processing in the debug run only
+        type: boolean
+        default: false
+      nvda-cache-control:
+        description: Register the independent focus observer with NVDA-like cached properties
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1018,6 +1030,10 @@ jobs:
         if: ${{ matrix.shard == 2 && (runner.os == 'macOS' || github.event_name != 'pull_request') && (!cancelled() && steps.native-build.outcome == 'success') }}
         continue-on-error: ${{ runner.os == 'Windows' }}
         timeout-minutes: 15
+        env:
+          BUN_NATIVE_NVDA_EVENT_DEBUG: ${{ github.event_name == 'workflow_dispatch' && inputs.nvda-debug && 'true' || 'false' }}
+          BUN_NATIVE_NVDA_DISABLE_ENHANCED: ${{ github.event_name == 'workflow_dispatch' && inputs.nvda-debug && inputs.nvda-disable-enhanced && 'true' || 'false' }}
+          BUN_NATIVE_UIA_CACHE_CONTROL: ${{ github.event_name == 'workflow_dispatch' && inputs.nvda-debug && inputs.nvda-cache-control && 'true' || 'false' }}
         run: |
           if ($IsMacOS) {
             bash scripts/quality/macos-voiceover-setup.sh (Join-Path $env:NATIVE_EVIDENCE 'voiceover-setup')
@@ -1064,6 +1080,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'The screen-reader AOT compiler or inspection failed' }
           $manifest = Get-Content -Raw (Join-Path $package 'manifest.json') | ConvertFrom-Json
           try {
+            $failedModes = @()
             foreach ($mode in @('development', 'aot')) {
               $evidence = Join-Path $env:NATIVE_EVIDENCE "screen-reader-$mode"
               New-Item -ItemType Directory $evidence | Out-Null
@@ -1075,12 +1092,19 @@ jobs:
                 & (Join-Path $package $manifest.application.file) 2>&1 |
                   Tee-Object -FilePath (Join-Path $evidence 'run.log')
               }
-              if ($LASTEXITCODE -ne 0) { throw "${{ runner.os }} $mode screen-reader qualification failed" }
+              if ($LASTEXITCODE -ne 0) {
+                if ($IsWindows -and $env:BUN_NATIVE_NVDA_EVENT_DEBUG -eq 'true') {
+                  $failedModes += $mode
+                  continue
+                }
+                throw "${{ runner.os }} $mode screen-reader qualification failed"
+              }
               $report = Get-Content -Raw (Join-Path $evidence 'result.json') | ConvertFrom-Json
               if ($report.status -ne 'passed' -or $report.mode -ne $mode) {
                 throw "${{ runner.os }} $mode screen-reader evidence does not record a pass"
               }
             }
+            if ($failedModes.Count -gt 0) { throw "Windows screen-reader qualification failed: $($failedModes -join ', ')" }
           } finally {
             # Never leave a screen reader running into later steps.
             if ($IsMacOS) {

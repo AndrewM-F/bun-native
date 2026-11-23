@@ -73,7 +73,31 @@ public static class BunNativeFocusEvents {
   if (-not $window) { throw 'UI Automation did not find the fixture window' }
   $processId = $window.Current.ProcessId
   if ($processId -le 0) { throw 'The fixture window has no process ID' }
-  [BunNativeFocusEvents]::Start($processId, $Output)
+  if ($env:BUN_NATIVE_UIA_CACHE_CONTROL -eq 'true') {
+    # NVDA 2024.4.2's base request also includes TextPattern. The .NET client
+    # differs from NVDA's IUIAutomation6 client, so this is a cache control,
+    # not a complete reproduction of NVDA's event registration.
+    $cache = New-Object System.Windows.Automation.CacheRequest
+    @(
+      $automation::NativeWindowHandleProperty, $automation::FrameworkIdProperty,
+      $automation::AutomationIdProperty, $automation::ClassNameProperty,
+      $automation::ControlTypeProperty,
+      $automation::ProcessIdProperty, $automation::IsTextPatternAvailableProperty,
+      $automation::IsContentElementProperty, $automation::IsControlElementProperty,
+      $automation::NameProperty, $automation::LocalizedControlTypeProperty
+    ) | ForEach-Object { $cache.Add($_) }
+    # UIA_ProviderDescriptionPropertyId is 30107. Older managed clients do
+    # not always register this identifier; record whether it was available.
+    $providerDescription = [System.Windows.Automation.AutomationProperty]::LookupById(30107)
+    if ($providerDescription) { $cache.Add($providerDescription) }
+    $cache.Add([System.Windows.Automation.TextPattern]::Pattern)
+    $activation = $cache.Activate()
+    try { [BunNativeFocusEvents]::Start($processId, $Output) }
+    finally { $activation.Dispose() }
+    [System.IO.File]::WriteAllText("$Output.cache-control", "NVDA-like cached properties and TextPattern requested; providerDescriptionAvailable=$([bool]$providerDescription)")
+  } else {
+    [BunNativeFocusEvents]::Start($processId, $Output)
+  }
   [System.IO.File]::WriteAllText($Ready, "$processId")
   $deadline = (Get-Date).AddMinutes(8)
   while (-not (Test-Path -LiteralPath $Stop)) {
