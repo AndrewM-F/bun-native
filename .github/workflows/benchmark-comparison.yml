@@ -112,8 +112,13 @@ jobs:
         working-directory: bun-source
         run: |
           . ./scripts/vs-shell.ps1
-          $cleanPath = ($env:PATH -split ';' | Where-Object { $_ -notmatch '(?i)strawberry|\\LLVM\\bin' }) -join ';'
-          $env:PATH = "C:\LLVM23\bin;$cleanPath;C:\Program Files\Git\usr\bin;C:\cygwin64\bin"
+          $paths = @($env:PATH, [Environment]::GetEnvironmentVariable('PATH', 'Machine'), [Environment]::GetEnvironmentVariable('PATH', 'User')) -join ';'
+          $cleanPath = ($paths -split ';' | Where-Object { $_ -and $_ -notmatch '(?i)strawberry' }) -join ';'
+          $llvmDir = @('C:\LLVM23\bin', 'C:\Program Files\LLVM\bin') | Where-Object {
+            (Test-Path (Join-Path $_ 'clang.exe')) -and ((& (Join-Path $_ 'clang.exe') --version | Select-Object -First 1) -match 'clang version 23\.1\.1')
+          } | Select-Object -First 1
+          if (-not $llvmDir) { throw 'Verified LLVM 23.1.1 executable not found' }
+          $env:PATH = "$llvmDir;C:\Program Files\NASM;$cleanPath;C:\Program Files\Git\usr\bin;C:\cygwin64\bin"
           $env:BUN_WEBKIT_PATH = Join-Path $env:GITHUB_WORKSPACE 'webkit-source'
           $env:RUSTUP_TOOLCHAIN = 'nightly-2026-09-15'
           clang --version
