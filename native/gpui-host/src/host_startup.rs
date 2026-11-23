@@ -19,7 +19,8 @@ const PHASES: [&str; 7] = [
 pub(crate) struct HostStartup {
     started: Instant,
     path: PathBuf,
-    nonce: String,
+    // Run correlation only; this is not a cryptographic nonce or grant.
+    correlation_id: String,
     points: [Option<u128>; PHASES.len()],
 }
 
@@ -30,14 +31,14 @@ impl HostStartup {
         }
         let started = Instant::now();
         let path = PathBuf::from(std::env::var_os("BUN_NATIVE_EVIDENCE_LOG")?);
-        let nonce = std::env::var("BUN_NATIVE_EVIDENCE_NONCE").ok()?;
-        if !valid_configuration(&path, &nonce) {
+        let correlation_id = std::env::var("BUN_NATIVE_EVIDENCE_NONCE").ok()?;
+        if !valid_configuration(&path, &correlation_id) {
             return None;
         }
         Some(Self {
             started,
             path,
-            nonce,
+            correlation_id,
             points: [None; PHASES.len()],
         })
     }
@@ -53,7 +54,7 @@ impl HostStartup {
                 phases.insert(name.into(), json!(value.to_string()));
             }
         }
-        let record = json!({"stage": "host-startup-phases", "nonce": self.nonce,
+        let record = json!({"stage": "host-startup-phases", "nonce": self.correlation_id,
             "pid": std::process::id(), "clock": "host_monotonic_relative",
             "phases_ns": phases});
         let line = format!("{record}\n");
@@ -71,11 +72,11 @@ impl HostStartup {
     }
 }
 
-fn valid_configuration(path: &std::path::Path, nonce: &str) -> bool {
+fn valid_configuration(path: &std::path::Path, correlation_id: &str) -> bool {
     path.is_absolute()
-        && !nonce.is_empty()
-        && nonce.len() <= 128
-        && !nonce.chars().any(char::is_control)
+        && !correlation_id.is_empty()
+        && correlation_id.len() <= 128
+        && !correlation_id.chars().any(char::is_control)
 }
 
 #[cfg(test)]
@@ -105,7 +106,7 @@ mod tests {
         let mut trace = HostStartup {
             started: Instant::now(),
             path: path.clone(),
-            nonce: "test-correlation".into(),
+            correlation_id: "test-correlation".into(),
             points: [None; PHASES.len()],
         };
         for index in 0..PHASES.len() {
