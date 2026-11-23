@@ -543,8 +543,8 @@ jobs:
         run: |
           $platform = if ($IsWindows) { 'win32' } else { 'darwin' }
           $jobs = if ($IsWindows) { 4 } else { 3 }
-          # Pull requests skip the experimental Windows screen-reader and IME steps.
-          $exclude = '${{ runner.os == 'Windows' && github.event_name == 'pull_request' && 'screen-reader,ime-platform' || '' }}'
+          # Pull requests skip the experimental Windows screen-reader step.
+          $exclude = '${{ runner.os == 'Windows' && github.event_name == 'pull_request' && 'screen-reader' || '' }}'
           bun scripts/quality/compile-aot-entries.ts --platform $platform --shard ${{ matrix.shard }} `
             --jobs $jobs "--exclude=$exclude" --keep-going
           if ($LASTEXITCODE -ne 0) { throw 'The parallel AOT compile could not run' }
@@ -1090,10 +1090,9 @@ jobs:
             }
             $global:LASTEXITCODE = 0
           }
-      - name: macOS and experimental Windows Korean input method composition in development and AOT (#241)
+      - name: macOS and Windows Korean input method composition in development and AOT (#241)
         id: ime-platform
-        if: ${{ matrix.shard == 2 && (runner.os == 'macOS' || github.event_name != 'pull_request') && (!cancelled() && steps.native-build.outcome == 'success') }}
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        if: ${{ matrix.shard == 2 && (!cancelled() && steps.native-build.outcome == 'success') }}
         timeout-minutes: 15
         run: |
           if ($IsMacOS) {
@@ -1164,15 +1163,14 @@ jobs:
               throw "${{ runner.os }} $mode IME evidence does not record a pass"
             }
           }
-      - name: Report experimental Windows screen-reader and IME outcomes (#241)
+      - name: Report experimental Windows screen-reader outcome (#241)
         if: ${{ matrix.shard == 2 && runner.os == 'Windows' && github.event_name != 'pull_request' && !cancelled() && steps.native-build.outcome == 'success' }}
         run: |
-          foreach ($pair in @(@('screen reader', '${{ steps.screen-reader.outcome }}'), @('IME', '${{ steps.ime-platform.outcome }}'))) {
-            if ($pair[1] -ne 'success') {
-              Write-Output "::warning::Experimental ${{ runner.os }} $($pair[0]) qualification outcome: $($pair[1]) (not gating; see the step log and evidence)"
-            }
-            "- Experimental ${{ runner.os }} $($pair[0]): $($pair[1])" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $outcome = '${{ steps.screen-reader.outcome }}'
+          if ($outcome -ne 'success') {
+            Write-Output "::warning::Experimental ${{ runner.os }} screen reader qualification outcome: $outcome (not gating; see the step log and evidence)"
           }
+          "- Experimental ${{ runner.os }} screen reader: $outcome" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
       - name: Display snapshot, work area, identity and display-change qualification (#299)
         if: ${{ matrix.shard == 2 && (!cancelled() && steps.native-build.outcome == 'success') }}
         timeout-minutes: 8
