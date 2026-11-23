@@ -11,6 +11,7 @@ if (!$IsWindows -or !(Test-Path -LiteralPath $Output -PathType Container)) {
 $root = (Resolve-Path -LiteralPath $Output).Path
 $clang = Join-Path $LlvmBin 'clang-cl.exe'
 $linker = Join-Path $LlvmBin 'lld-link.exe'
+$librarian = Join-Path $LlvmBin 'llvm-lib.exe'
 $version = & $clang --version
 if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch 'clang version 23\.1\.1') {
   throw 'The control requires LLVM 23.1.1'
@@ -19,7 +20,8 @@ $records = [Collections.Generic.List[object]]::new()
 foreach ($linkage in @('weak', 'strong')) {
   foreach ($lto in @('off', 'on')) {
    foreach ($definitionLto in @('off', 'on')) {
-    $directory = Join-Path $root "$linkage-$lto-definition-$definitionLto"
+    foreach ($placement in @('object', 'archive')) {
+    $directory = Join-Path $root "$linkage-$lto-definition-$definitionLto-$placement"
     New-Item -ItemType Directory -Path $directory | Out-Null
     $attribute = if ($linkage -eq 'weak') { '__attribute__((weak)) ' } else { '' }
     $declaration = "extern `"C`" ${attribute}void WTFTimer__update(int);"
@@ -39,6 +41,12 @@ foreach ($linkage in @('weak', 'strong')) {
       if ($LASTEXITCODE -ne 0) { throw "Compiler failed for $linkage/$lto/$name" }
       $objects += $object
     }
+    if ($placement -eq 'archive') {
+      $archive = Join-Path $directory 'definition.lib'
+      & $librarian "/out:$archive" $objects[2] *> (Join-Path $directory 'archive.log')
+      if ($LASTEXITCODE -ne 0) { throw 'Creating the definition archive failed' }
+      $objects = @($objects[0], $objects[1], $archive)
+    }
     $dll = Join-Path $directory 'control.dll'
     & $linker /dll /noentry /nodefaultlib /opt:noref /LTCG /opt:lldlto=2 /opt:lldltocgo=2 "/out:$dll" @objects *> (Join-Path $directory 'link.log')
     $linkExit = $LASTEXITCODE
@@ -46,12 +54,14 @@ foreach ($linkage in @('weak', 'strong')) {
       linkage = $linkage
       thinLto = ($lto -eq 'on')
       definitionThinLto = ($definitionLto -eq 'on')
+      definitionPlacement = $placement
       linkExit = $linkExit
       sourceSha256 = (Get-FileHash -Algorithm SHA256 (Join-Path $directory 'a.cpp')).Hash
     })
     ConvertTo-Json -InputObject ($records.ToArray()) -Depth 5 | Set-Content -Encoding utf8 (Join-Path $root 'results.json')
-    Write-Output "$linkage/$lto/definition-$definitionLto link exit $linkExit"
+    Write-Output "$linkage/$lto/definition-$definitionLto/$placement link exit $linkExit"
     if ($linkage -eq 'strong' -and $linkExit -ne 0) { throw 'Strong-import positive control failed' }
+  }
   }
   }
 }
