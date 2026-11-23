@@ -748,6 +748,7 @@ jobs:
         timeout-minutes: 6
         run: |
           if ($IsWindows) {
+            $env:BUN_NATIVE_MTIME_BOUNDARY = '1'
             bun test tests/quality/windows-filetime-evidence.test.ts
             if ($LASTEXITCODE -ne 0) { throw 'Windows FILETIME evidence control failed' }
           }
