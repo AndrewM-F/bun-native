@@ -20,6 +20,7 @@ on:
             'first-observation',
             'runtime-preflight',
             'runtime-cross-preflight',
+            'runtime-cross-tools',
             'runtime-build',
             'runtime-compare',
             'runtime-link-control',
@@ -453,6 +454,34 @@ jobs:
             !${{ runner.temp }}/runtime-rust-symbols/**/*.pdb
           if-no-files-found: warn
           retention-days: 7
+
+  linux-runtime-cross-tools:
+    name: Verify Linux Windows cross-build tools
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-tools'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install pinned LLVM, NASM and Rust cross target
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/llvm-23.1.1.tar.xz"
+          curl --fail --location --retry 3 --output "$archive" https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-Linux-X64.tar.xz
+          printf '%s  %s\n' '832aeb58d105de1cabc7b982dd2c65de0610f7377df48ae8fc2dd8e97420a15c' "$archive" | sha256sum --check
+          mkdir "$RUNNER_TEMP/llvm"
+          tar -xJf "$archive" -C "$RUNNER_TEMP/llvm" --strip-components=1
+          sudo apt-get update
+          sudo apt-get install -y nasm
+          rustup toolchain install nightly-2026-09-15 --profile minimal --component rust-src --component llvm-tools --target x86_64-pc-windows-msvc
+          export PATH="$RUNNER_TEMP/llvm/bin:$PATH"
+          for tool in clang clang-cl lld-link llvm-lib llvm-rc; do
+            command -v "$tool"
+            "$tool" --version | head -n 1
+          done
+          nasm --version
+          rustup run nightly-2026-09-15 rustc --version --verbose
+          rustup target list --toolchain nightly-2026-09-15 --installed
+          df -h "$RUNNER_TEMP"
 
   linux-runtime-cross-preflight:
     name: Linux Windows cross-build preflight
