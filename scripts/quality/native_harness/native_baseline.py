@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import native_input_linux as NATIVE_INPUT
 from .common import ROOT as REPOSITORY
-from .common import fingerprint
+from .common import fingerprint, vendor_source_paths
 
 DRIVER = REPOSITORY / "scripts/quality/native-input-linux.py"
 
@@ -144,15 +144,7 @@ def expected_sources(repository, *, source_commit=None):
             path.relative_to(repository).as_posix()
             for path in (manifest.parent / "src").rglob("*.rs")
         )
-    for manifest in (repository / "native/vendor").glob("*/Cargo.toml"):
-        paths.add(manifest.relative_to(repository).as_posix())
-        if (build := manifest.parent / "build.rs").is_file():
-            paths.add(build.relative_to(repository).as_posix())
-        paths.update(
-            path.relative_to(repository).as_posix()
-            for path in (manifest.parent / "src").rglob("*")
-            if path.is_file()
-        )
+    paths.update(path.relative_to(repository).as_posix() for path in vendor_source_paths(repository))
     return paths
 
 

@@ -49,3 +49,5 @@ work=$(mktemp -d) && cp -r native/vendor/gpui_linux/src "$work/" &&
 ```
 
 The lockfile drops `gpui_linux`'s Git source line, its `oo7` dependency and the crates only `oo7` used, and `zvariant` no longer depends on `serde_bytes` (its `gvariant` feature).
+
+The standalone manifest also points `xim` to the locally vendored zed-xim and updates `x11rb` to 0.14; see [`xim-rs/bun-native/README.md`](../../xim-rs/bun-native/README.md). These dependency changes do not change the pinned GPUI source revision.

@@ -21,6 +21,12 @@ describe('AOT native source provenance inventory', () => {
       'native/vendor/example-hal/src/lib.rs',
       'native/vendor/example-hal/src/shaders/clear.frag',
       'native/vendor/example-hal/src/shaders/clear.vert',
+      'native/vendor/example-hal/res/generated.rs',
+      'native/vendor/example-hal/parser/Cargo.toml',
+      'native/vendor/example-hal/parser/build.rs',
+      'native/vendor/example-hal/parser/format.yaml',
+      'native/vendor/example-hal/parser/src/lib.rs',
+      'native/vendor/example-hal/parser/res/generated.rs',
     ]
     try {
       for (const path of [
@@ -65,7 +71,21 @@ describe('AOT native source provenance inventory', () => {
         const path = `native/vendor/${crate.name}/${name}`
         if (existsSync(join(source, path))) expected.push(path)
       }
-      walk(`native/vendor/${crate.name}/src`, true)
+      const root = `native/vendor/${crate.name}`
+      walk(`${root}/src`, true)
+      walk(`${root}/res`, true)
+      for (const child of readdirSync(join(source, root), { withFileTypes: true })) {
+        if (!child.isDirectory()) continue
+        const nested = `${root}/${child.name}`
+        if (!existsSync(join(source, nested, 'Cargo.toml'))) continue
+        expected.push(`${nested}/Cargo.toml`)
+        if (existsSync(join(source, nested, 'build.rs'))) expected.push(`${nested}/build.rs`)
+        for (const asset of readdirSync(join(source, nested), { withFileTypes: true }))
+          if (asset.isFile() && asset.name.endsWith('.yaml'))
+            expected.push(`${nested}/${asset.name}`)
+        walk(`${nested}/src`, true)
+        walk(`${nested}/res`, true)
+      }
     }
     expect(expected).toContain('native/gpui-host/src/channel.rs')
     expect(expected).toContain('native/macos-surface/src/lib.rs')

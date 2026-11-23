@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from . import native_input_linux as DRIVER
-from .common import ROOT, harness_sources, interrupt_handler
+from .common import ROOT, harness_sources, interrupt_handler, vendor_source_paths
 from .common import fingerprint as file_fingerprint
 
 LOGGER = logging.getLogger(__name__)
@@ -52,12 +52,7 @@ def source_snapshot():
         paths.extend((ROOT / "packages" / package / "src").rglob("*.ts"))
     paths.extend((ROOT / "native").rglob("*.rs"))
     paths.extend((ROOT / "native").rglob("Cargo.toml"))
-    for manifest in (ROOT / "native/vendor").glob("*/Cargo.toml"):
-        paths.extend(
-            path
-            for path in (manifest.parent / "src").rglob("*")
-            if path.is_file() and path.suffix != ".rs"
-        )
+    paths.extend(vendor_source_paths(ROOT))
     return {str(path.relative_to(ROOT)): fingerprint(path) for path in sorted(paths)}
 
 

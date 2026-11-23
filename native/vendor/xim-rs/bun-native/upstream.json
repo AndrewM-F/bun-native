@@ -1,0 +1,137 @@
+{
+  "repository": "https://github.com/zed-industries/xim-rs",
+  "commit": "16f35a2c881b815a2b6cdfd6687988e84f8447d8",
+  "files": {
+    ".gitignore": {
+      "bytes": 27,
+      "sha256": "bbd64b10aec7b7915cf595b219d1e457acc7652c93d86d9265aaf4edfafdf864"
+    },
+    "Cargo.toml": {
+      "bytes": 1835,
+      "sha256": "9fb4abb3c1242c2f4f1ce973ec834f81d7a7f189e0515427e419b39f1cb84168"
+    },
+    "LICENSE": {
+      "bytes": 1061,
+      "sha256": "efa1224931b98468f5005f77285457f8d2eab0a77a15941aa10abbab1ae9a74e"
+    },
+    "README.md": {
+      "bytes": 907,
+      "sha256": "f1b7d11e076d067375e861a2e4d01a05413fc4c2f446d78069495f103bc15b62"
+    },
+    "benches/rw.rs": {
+      "bytes": 2728,
+      "sha256": "4edf25c72941213c4a82d95144d2a7f7a80e0a60cf626fa135c5e824e715a8e5"
+    },
+    "examples/util/handler.rs": {
+      "bytes": 5419,
+      "sha256": "ee070fbe8ee7fdb4877aa0501255382bfe77f895fc1929625ae73f8103eddea5"
+    },
+    "examples/x11rb_client.rs": {
+      "bytes": 1976,
+      "sha256": "9e1d6c2ff1187793d2732de5bf7dc06beb2f7f49b118a757819bdd3be0dfca3b"
+    },
+    "examples/x11rb_server.rs": {
+      "bytes": 3314,
+      "sha256": "ca8e84cf8406805b4e20c9cddc62da564dfeb18a8cc0ab609059888da006d505"
+    },
+    "examples/xlib_client.rs": {
+      "bytes": 1963,
+      "sha256": "36cab9444d991b8f135e3b67bf9769d346d8b44315aeff73fb0611e7a3fb2c89"
+    },
+    "src/all_locales.txt": {
+      "bytes": 513,
+      "sha256": "eba0b65263a038511b3ad0c25350c9152cc0166001e3e7823fb58b51decb2bb3"
+    },
+    "src/client/attribute_builder.rs": {
+      "bytes": 1659,
+      "sha256": "9f3cb7923bb2a38e2e76e81075abbe7c1a7236970dddac910d25f8eb68cc400c"
+    },
+    "src/client.rs": {
+      "bytes": 17614,
+      "sha256": "b16c37b3281f0d86fda1cdf8db77537496bbc270d95c4181568e8520233872f4"
+    },
+    "src/lib.rs": {
+      "bytes": 3101,
+      "sha256": "b68b598f010e7278313b5bf1e460648fcde3d2187fb9b6a6ead653fd0e18402e"
+    },
+    "src/server/connection/im_vec.rs": {
+      "bytes": 1439,
+      "sha256": "28b24c250237b291e31f3559df276fa489f9dab203fb5358edece9b27039e898"
+    },
+    "src/server/connection.rs": {
+      "bytes": 21373,
+      "sha256": "4ed777df1446253cb41adafba9507af1c31d0d75ad61b1435d3e3dca460174b0"
+    },
+    "src/server.rs": {
+      "bytes": 8412,
+      "sha256": "ce28c50ce821ebabb430935f3b5d17fae79ddf2817205ffa8252821345558da5"
+    },
+    "src/x11rb.rs": {
+      "bytes": 23442,
+      "sha256": "259adcd1a76d4e065c77f39bd736d3363f945700024eb142dbe3381a32717ab3"
+    },
+    "src/xlib.rs": {
+      "bytes": 16612,
+      "sha256": "0595e5076c1f433817b132fb8fa17c9b52d18eb576b9df7c1d24ffecd108c1d3"
+    },
+    "xim-ctext/Cargo.toml": {
+      "bytes": 309,
+      "sha256": "78682d1e7321a5c0301ee975ed74e4c3ea6a3568dedf00e4df7c670e0d4b1423"
+    },
+    "xim-ctext/README.md": {
+      "bytes": 56,
+      "sha256": "fa121baa984ec1f1ea4472dbb4d57a7b4e5f6513100cbc9df2aaa1c54c0e4175"
+    },
+    "xim-ctext/src/lib.rs": {
+      "bytes": 11209,
+      "sha256": "23d72e0982fc886b9104ea4cc1d14822337d87cb33a4043b53e963b3eac72cd1"
+    },
+    "xim-ctext/src/main.rs": {
+      "bytes": 431,
+      "sha256": "d4ee34ae260fae894dc8672cc38f8d2dea22e57d62907c92f974769793e28257"
+    },
+    "xim-gen/Cargo.toml": {
+      "bytes": 317,
+      "sha256": "769026a3afddc398fe7b87de1dc2335f6f9e1e764cc44167855add4151fdd887"
+    },
+    "xim-gen/res/snippet.rs": {
+      "bytes": 11808,
+      "sha256": "23c0b94fb2033de5edb86edf81b73f8763195f3f06abbb1275ebc669665c04e0"
+    },
+    "xim-gen/src/format_type.rs": {
+      "bytes": 8223,
+      "sha256": "366433e104d299097049da58c2e899b2f5282580cb3c8ea6bfb7cd9aaa5efbbf"
+    },
+    "xim-gen/src/lib.rs": {
+      "bytes": 12308,
+      "sha256": "1d3034cd4f15a726ac497b3a431786ebc7ebd1b3f68daee7889f34c1059eb19e"
+    },
+    "xim-parser/Cargo.toml": {
+      "bytes": 558,
+      "sha256": "4b14a509cd6fd7f3acadad5fc95a6b98f4ebc467e8e7e98f78c6a6e3cb448fea"
+    },
+    "xim-parser/build.rs": {
+      "bytes": 136,
+      "sha256": "1f0823aec218950d9bb66d71cfd791caeb044afc84e9b3b9df8de3a11da10bb6"
+    },
+    "xim-parser/src/attrs.rs": {
+      "bytes": 1869,
+      "sha256": "d8b2e8c12b4768ca147645ffc7173978d0701a59fc7266c76d97f66779987827"
+    },
+    "xim-parser/src/lib.rs": {
+      "bytes": 11810,
+      "sha256": "bf9888884ea17bf448ea75e514b48030d4d0d2cf1b967f31b6c9f697ade0d84c"
+    },
+    "xim-parser/src/parser.rs": {
+      "bytes": 107225,
+      "sha256": "ac213541422c6eead512c8d0697f60b77cc13a93660f7da9d14b6d2cc127d4b0"
+    },
+    "xim-parser/xim-format.yaml": {
+      "bytes": 12456,
+      "sha256": "c4c9945fc7b28a2606a7b52a39709316ded4c8b8320ab98d73a26ae9f41695b2"
+    }
+  },
+  "patched": [],
+  "added": [],
+  "patches": {}
+}
