@@ -47,6 +47,14 @@ def observations_valid(records):
     )
 
 
+def control_environment(environ, revision, aot_reference=None):
+    env = {**environ, "CONTROL_EXPECTED_REVISION": revision}
+    env.pop("CONTROL_AOT_REFERENCE_COMPILER", None)
+    if aot_reference is not None:
+        env["CONTROL_AOT_REFERENCE_COMPILER"] = aot_reference
+    return env
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("peer", type=Path)
@@ -54,6 +62,7 @@ def main():
     parser.add_argument("candidate", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--pairs", type=int, default=3)
+    parser.add_argument("--development-controls-only", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.pairs <= 5:
         raise ValueError("pairs must be in 1..5")
@@ -73,7 +82,14 @@ def main():
         "peerSha256": sha256(peer),
         "pairs": args.pairs,
         "order": "baseline/candidate on even pairs; candidate/baseline on odd pairs",
-        "scope": "Headless React retention controls; no native input, paint or performance qualification.",
+        "scope": (
+            "Development runtime comparison only; AOT controls use the distributed compiler, not the candidate. No native input, paint or performance qualification."
+            if args.development_controls_only
+            else "Headless React retention controls; no native input, paint or performance qualification."
+        ),
+        "aotReferenceRuntime": runtimes["baseline"]
+        if args.development_controls_only
+        else None,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     records = []
@@ -92,8 +108,21 @@ def main():
                 "cycle",
                 runtimes[variant]["path"],
             ]
-            env = {**os.environ, "CONTROL_EXPECTED_REVISION": revision}
-            record = {"trial": trial, "variant": variant, "valid": False}
+            env = control_environment(
+                os.environ,
+                revision,
+                runtimes["baseline"]["path"]
+                if args.development_controls_only
+                else None,
+            )
+            record = {
+                "trial": trial,
+                "variant": variant,
+                "comparisonScope": "development-only"
+                if args.development_controls_only
+                else "development-and-aot",
+                "valid": False,
+            }
             try:
                 with (output / f"{trial:02}-{variant}.log").open("wb") as log:
                     process = subprocess.run(

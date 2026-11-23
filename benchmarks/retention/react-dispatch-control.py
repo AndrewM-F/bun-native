@@ -220,7 +220,10 @@ def main():
     trials = int(sys.argv[3])
     kind = sys.argv[4] if len(sys.argv) > 4 else "dispatch"
     runtime = sys.argv[5] if len(sys.argv) > 5 else None
-    compiler = runtime or "bun"
+    # A separately labeled development-only runtime comparison may compile its
+    # AOT reference with the distributed compiler. The runtime under test is
+    # still passed to the headless development workload below.
+    compiler = os.environ.get("CONTROL_AOT_REFERENCE_COMPILER") or runtime or "bun"
     if kind not in ("dispatch", "shutdown", "cycle", "first-observation", "listener"):
         raise ValueError("Unknown control kind")
     if not 1 <= trials <= 10:
@@ -278,6 +281,11 @@ def main():
     }
     plan = {
         "kind": kind,
+        "compiler": compiler,
+        "developmentRuntime": runtime or "bun",
+        "usesDistributedAotReference": bool(
+            os.environ.get("CONTROL_AOT_REFERENCE_COMPILER")
+        ),
         "originalSourceSha256": digest(source.encode()),
         "originalSourceFileSha256": digest(fixture.read_bytes()),
         "originalWorkloadSha256": digest(original_workload.encode())

@@ -29,6 +29,7 @@ on:
             'runtime-force-compare',
             'runtime-strong-build',
             'runtime-strong-compare',
+            'runtime-strong-dev-compare',
           ]
         default: 'none'
       runtime-build-run:
@@ -178,7 +179,7 @@ jobs:
 
   windows-runtime-compare:
     name: Compare source-built and distributed Windows runtimes
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-compare", "runtime-force-compare", "runtime-strong-compare"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-compare", "runtime-force-compare", "runtime-strong-compare", "runtime-strong-dev-compare"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 60
     permissions:
@@ -208,7 +209,7 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP 'runtime-comparison'
           New-Item -ItemType Directory -Path $root | Out-Null
           $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'source-run.json')
-          $artifactName = if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-strong-compare') { 'windows-strong-timer-diagnostic' } elseif ($env:RETENTION_DIAGNOSTIC -eq 'runtime-force-compare') { 'windows-forced-timer-source-runtime' } else { 'windows-uninstrumented-source-runtime' }
+          $artifactName = if ($env:RETENTION_DIAGNOSTIC -in @('runtime-strong-compare', 'runtime-strong-dev-compare')) { 'windows-strong-timer-diagnostic' } elseif ($env:RETENTION_DIAGNOSTIC -eq 'runtime-force-compare') { 'windows-forced-timer-source-runtime' } else { 'windows-uninstrumented-source-runtime' }
           gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name $artifactName --dir (Join-Path $root 'source-artifact')
           if ($LASTEXITCODE -ne 0) { throw 'Runtime artifact download failed' }
           $runtime = @(Get-ChildItem (Join-Path $root 'source-artifact') -Filter bun.exe -File -Recurse)
@@ -218,7 +219,7 @@ jobs:
           $sourceAdjustment = $adjustments.'webkit/Source/WTF/wtf/bun/RunLoopBun.cpp'
           $upstreamBuildKey = @('scripts', 'build', 'bun.ts') -join '/'
           $timerAdjustment = $adjustments.$upstreamBuildKey
-          if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-strong-compare') {
+          if ($env:RETENTION_DIAGNOSTIC -in @('runtime-strong-compare', 'runtime-strong-dev-compare')) {
             if (!$sourceAdjustment -or $sourceAdjustment.originalSha256 -ne '9053c4e134bb758077975c58168f003ad51ffc1cf5287f0f627f9e52abb60378' -or $sourceAdjustment.adjustedSha256 -ne 'e081b917bdeaf5ad3facba1b973997ce1e70051d014abd69def12f4ae896610f' -or $timerAdjustment) { throw 'Unexpected strong-timer diagnostic identity' }
           } elseif ($sourceAdjustment) { throw 'Comparison refuses a runtime-source diagnostic build' }
           if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-force-compare') {
@@ -226,12 +227,15 @@ jobs:
           } elseif ($timerAdjustment) { throw 'Unforced comparison refuses a forced-timer build' }
           "SOURCE_RUNTIME=$($runtime[0].FullName)" >> $env:GITHUB_ENV
       - name: Run alternating headless runtime controls
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'runtime-comparison'
           bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
           $pinned = (Get-Command bun -CommandType Application).Source
-          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3
+          $extra = if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-strong-dev-compare') { @('--development-controls-only') } else { @() }
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 @extra
           if ($LASTEXITCODE -ne 0) { throw 'At least one paired runtime control was invalid' }
       - name: Retain every control and source identity
         if: ${{ always() }}

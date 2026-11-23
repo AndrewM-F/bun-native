@@ -14,6 +14,15 @@ SPEC.loader.exec_module(PAIRS)
 
 
 class RuntimePairsTests(unittest.TestCase):
+    def test_aot_reference_override_is_explicit_and_not_inherited(self):
+        inherited = {"CONTROL_AOT_REFERENCE_COMPILER": "unexpected", "KEEP": "yes"}
+        normal = PAIRS.control_environment(inherited, "pinned")
+        self.assertNotIn("CONTROL_AOT_REFERENCE_COMPILER", normal)
+        self.assertEqual(normal["KEEP"], "yes")
+        self.assertEqual(normal["CONTROL_EXPECTED_REVISION"], "pinned")
+        development = PAIRS.control_environment(inherited, "pinned", "distributed")
+        self.assertEqual(development["CONTROL_AOT_REFERENCE_COMPILER"], "distributed")
+
     def test_requires_each_valid_control_in_both_execution_modes(self):
         records = [
             {
