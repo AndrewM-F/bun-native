@@ -391,13 +391,9 @@ jobs:
             }
             return
           }
-          if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-strong-build') {
-            # The release-local profile defaults to an untrimmable link. The
-            # paired AOT guard requires the trim table used by distribution builds.
-            bun scripts/build.ts --profile=release-local --lto=on --trimmable=on --build-dir=build/release-local
-          } else {
-            bun scripts/build.ts --profile=release-local --lto=on --build-dir=build/release-local
-          }
+          # Upstream disables trimmable links on native Windows even when
+          # requested. The paired AOT inspection therefore remains essential.
+          bun scripts/build.ts --profile=release-local --lto=on --build-dir=build/release-local
           if ($LASTEXITCODE -ne 0) { throw 'Source runtime build failed' }
           $runtime = Resolve-Path build/release-local/bun.exe
           Get-FileHash -Algorithm SHA256 $runtime
