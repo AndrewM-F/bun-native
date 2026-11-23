@@ -115,7 +115,7 @@ jobs:
             Get-FileHash -Algorithm SHA256 $object[0].FullName | Format-List | Out-File (Join-Path $root "$name.hash.txt")
             & 'C:\Program Files\LLVM\bin\llvm-nm.exe' --format=posix $object[0].FullName > (Join-Path $root "$name.symbols.txt")
             if ($LASTEXITCODE -ne 0) { throw "Symbol inspection failed: $name" }
-            & 'C:\Program Files\LLVM\bin\llvm-dis.exe' $object[0].FullName -o (Join-Path $root "$name.ll")
+            & 'C:\Program Files\LLVM\bin\clang.exe' -S -emit-llvm -x ir $object[0].FullName -o (Join-Path $root "$name.ll")
             if ($LASTEXITCODE -ne 0) { throw "Bitcode inspection failed: $name" }
             Select-String -Path (Join-Path $root "$name.ll") -Pattern 'WTFTimer__update' | Out-File (Join-Path $root "$name.timer.txt")
           }
