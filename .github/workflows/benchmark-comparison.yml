@@ -150,7 +150,13 @@ jobs:
           if ((Get-FileHash -Algorithm SHA256 $installer).Hash -ne '11af43ba261a1158090dd6f0da40d7a34f32dbfb4a76b43240bffa1ebb140984') { throw 'LLVM installer digest mismatch' }
           $install = Start-Process msiexec.exe -ArgumentList @('/i', $installer, '/qn', '/norestart') -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "LLVM installer failed: $($install.ExitCode)" }
+      - name: Install the source-build Rust toolchain
+        run: |
+          rustup toolchain install nightly-2026-09-15 --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain install failed' }
       - name: Compare weak and strong imports with and without ThinLTO
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-09-15
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'runtime-link-control'
           New-Item -ItemType Directory -Path $root | Out-Null
