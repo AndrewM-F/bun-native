@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.37.5](https://github.com/AndrewM-F/bun-native/compare/v0.37.4...v0.37.5) (2026-11-23)
+
+
+### Tests
+
+* **ci:** compare Windows hosted build images ([#765](https://github.com/AndrewM-F/bun-native/issues/765)) ([42c7351](https://github.com/AndrewM-F/bun-native/commit/42c735142ee6259e96d07e83bc0be273df0d6c9a))
+* **host:** record buffered startup phases ([#763](https://github.com/AndrewM-F/bun-native/issues/763)) ([d96232d](https://github.com/AndrewM-F/bun-native/commit/d96232d80d38b5ae4daa4e30f9339e3ef029cea4))
+* **windows:** gate Korean IME and trace screen reader focus ([#764](https://github.com/AndrewM-F/bun-native/issues/764)) ([e6b11d3](https://github.com/AndrewM-F/bun-native/commit/e6b11d3d7dc742490538d1bdc7fc629f60176427))
+* **windows:** qualify quick-start from a clean clone ([#771](https://github.com/AndrewM-F/bun-native/issues/771)) ([eca8bae](https://github.com/AndrewM-F/bun-native/commit/eca8baef3ed6ba566516b7163ef3cde245fcc2b6))
+* **windows:** trace NVDA focus event decisions ([#770](https://github.com/AndrewM-F/bun-native/issues/770)) ([0b13cf2](https://github.com/AndrewM-F/bun-native/commit/0b13cf2a5b2d938598a16f461c99d9a4708513d3))
+
 ## [0.37.4](https://github.com/AndrewM-F/bun-native/compare/v0.37.3...v0.37.4) (2026-11-23)
 
 
