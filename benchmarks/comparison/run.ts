@@ -28,6 +28,7 @@ import {
 } from './stats.ts'
 import toolchain from '../../toolchain.json'
 import { kernel32, ProcessTreeSampler, windowsLoad } from './windows-processes.ts'
+import { setComparisonOutcome } from './outcome.ts'
 
 const ADAPTERS = ['core', 'solid', 'react'] as const
 const MODES = ['development', 'aot'] as const
@@ -787,8 +788,7 @@ try {
   const failed = [...launches, ...inputLaunches]
     .filter((item) => item.status === 'failed')
     .map((item) => item.name)
-  report['failedLaunches'] = failed
-  report['status'] = failed.length ? 'completed-with-failures' : 'passed'
+  setComparisonOutcome(report, failed)
 } catch (error) {
   report['status'] = 'failed'
   report['error'] = error instanceof Error ? error.stack : String(error)
