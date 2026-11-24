@@ -94,7 +94,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Drag source build failed' }
           "BUN_NATIVE_DRAG_SOURCE=$source" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Get-FileHash -Algorithm SHA256 $source | Format-List | Out-File (Join-Path $root 'drag-source-sha256.txt')
-          bun scripts/quality/compile-aot-entries.ts --entry drag-drop --outdir (Join-Path $root 'package')
+          bun scripts/quality/compile-aot-entries.ts --entry drag-drop --outdir (Join-Path $root 'package') --host $hostPath
           if ($LASTEXITCODE -ne 0) { throw 'AOT fixture build or inspection failed' }
       - name: Run eight alternating development and AOT pairs
         timeout-minutes: 60
