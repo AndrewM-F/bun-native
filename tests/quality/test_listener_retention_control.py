@@ -64,6 +64,12 @@ class ListenerRetentionControlTests(unittest.TestCase):
             self.assertIn(f"__listenerDiagnosticPin = {target}", pinned)
             self.assertIn("listener = undefined; view = undefined!;", pinned)
 
+    def test_listener_plan_does_not_require_an_instrumented_workload(self):
+        for kind in ("listener", "safe-listener", "dispatch"):
+            self.assertIsNone(CONTROL.workload_hashes(kind, {"baseline": None}))
+        hashes = CONTROL.workload_hashes("cycle", {"baseline": "example"})
+        self.assertEqual(hashes["baseline"], CONTROL.digest(b"example"))
+
     def test_cached_disposal_is_repeatable_and_preserves_failures(self):
         source = (ROOT / "benchmarks/solid/react.tsx").read_text()
         generated = CONTROL.listener_source(source, "safe-clear")

@@ -213,6 +213,14 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def workload_hashes(kind, workloads):
+    if kind in ("cycle", "first-observation"):
+        return {name: digest(text.encode()) for name, text in workloads.items()}
+    if kind == "shutdown":
+        return digest(workloads["baseline"].encode())
+    return None
+
+
 def save_variant(path, text):
     path.write_text(text, encoding="utf-8", newline="\n")
 
@@ -318,18 +326,12 @@ def main():
         "variantSourceSha256": {
             name: digest(text.encode()) for name, text in sources.items()
         },
-        "instrumentedWorkloadSha256": (
-            {name: digest(text.encode()) for name, text in workloads.items()}
-            if kind in ("cycle", "first-observation", "listener", "safe-listener")
-            else digest(workloads["baseline"].encode())
-            if kind == "shutdown"
-            else None
-        ),
+        "instrumentedWorkloadSha256": workload_hashes(kind, workloads),
         "peerSha256": digest(peer.read_bytes()),
         "trialsPerVariant": trials,
         "ordering": (
             f"{variants} on even pairs; reverse on odd pairs"
-            if kind in ("cycle", "first-observation")
+            if kind in ("cycle", "first-observation", "listener", "safe-listener")
             else f"{variants[0]} then {variants[1]} on even pairs; reverse on odd pairs"
         ),
         "difference": (
