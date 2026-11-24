@@ -1,0 +1,117 @@
+name: Native mount pairs
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize]
+    paths:
+      - .github/workflows/native-mount-pairs.yml
+      - benchmarks/renderer/native-mount.ts
+      - benchmarks/renderer/native-mount-pairs.py
+      - benchmarks/renderer/README.md
+      - native/protocol/src/tree.rs
+      - native/protocol/src/tree/tests.rs
+      - tests/quality/test_native_mount_pairs.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-mount-pairs-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'pull_request' && (github.event.pull_request.draft && '-draft' || '-ready') || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pairs:
+    name: Paired native mount (Linux)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Checkout pinned baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d4074b2ee22cb5d6a9926cae9193bbbd6d2803ef
+          path: .baseline
+          persist-credentials: false
+      - name: Verify source identities and share fixture
+        run: |
+          set -euo pipefail
+          base=d4074b2ee22cb5d6a9926cae9193bbbd6d2803ef
+          test "$(git -C .baseline rev-parse HEAD)" = "$base"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --name-only "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/native-mount-changed.txt"
+          python3 - <<'PY2'
+          import os
+          from pathlib import Path
+          allowed = {'.github/workflows/native-mount-pairs.yml', 'benchmarks/renderer/native-mount.ts', 'benchmarks/renderer/native-mount-pairs.py', 'benchmarks/renderer/README.md', 'native/protocol/src/tree.rs', 'native/protocol/src/tree/tests.rs', 'tests/quality/test_native_mount_pairs.py', 'tests/quality/ci-event-coverage.test.ts'}
+          changed = set((Path(os.environ['RUNNER_TEMP']) / 'native-mount-changed.txt').read_text().splitlines())
+          if not changed or changed - allowed:
+              raise SystemExit(f'Unexpected source changes: {sorted(changed - allowed)}')
+          PY2
+          cmp rust-toolchain.toml .baseline/rust-toolchain.toml
+          cmp Cargo.lock .baseline/Cargo.lock
+          cp benchmarks/renderer/native-mount.ts .baseline/benchmarks/renderer/native-mount.ts
+          cmp benchmarks/renderer/native-mount.ts .baseline/benchmarks/renderer/native-mount.ts
+      - name: Install native prerequisites
+        timeout-minutes: 25
+        uses: ./.github/actions/linux-native-prerequisites
+      - name: Build both release hosts and inspected AOT clients
+        timeout-minutes: 80
+        run: |
+          set -euo pipefail
+          for variant in base candidate; do
+            if [[ "$variant" == base ]]; then source_dir="$GITHUB_WORKSPACE/.baseline"; else source_dir="$GITHUB_WORKSPACE"; fi
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/native-mount-target-$variant"
+            (cd "$source_dir"; cargo build --locked --release -p bun-native-host --bin bun-native-host; bun install --frozen-lockfile --ignore-scripts)
+            mkdir -p "$RUNNER_TEMP/native-mount-$variant"
+            cp "$CARGO_TARGET_DIR/release/bun-native-host" "$RUNNER_TEMP/native-mount-$variant/host"
+            rm -rf "$CARGO_TARGET_DIR"
+            MOUNT_SOURCE="$source_dir" MOUNT_OUTPUT="$RUNNER_TEMP/native-mount-$variant/app" bun -e '
+              import { compileApplication } from "./scripts/native/compile.ts";
+              console.log(JSON.stringify(compileApplication(process.env.MOUNT_SOURCE! + "/benchmarks/renderer/native-mount.ts", process.env.MOUNT_OUTPUT!, process.env.MOUNT_SOURCE!)));
+            ' > "$RUNNER_TEMP/native-mount-$variant/inspection.json"
+          done
+          sha256sum "$RUNNER_TEMP/native-mount-base/host" "$RUNNER_TEMP/native-mount-candidate/host" | tee "$RUNNER_TEMP/native-mount-host-sha256.txt"
+          if cmp -s "$RUNNER_TEMP/native-mount-base/host" "$RUNNER_TEMP/native-mount-candidate/host"; then
+            echo 'Baseline and candidate host binaries are identical; refusing a candidate comparison.' >&2
+            exit 1
+          fi
+      - name: Collect development and AOT pairs
+        timeout-minutes: 60
+        run: |
+          set -euo pipefail
+          bash scripts/quality/native-x11-session.sh "$RUNNER_TEMP/native-mount-session" -- \
+            python3 benchmarks/renderer/native-mount-pairs.py \
+              --base-source "$GITHUB_WORKSPACE/.baseline" --candidate-source "$GITHUB_WORKSPACE" \
+              --base-host "$RUNNER_TEMP/native-mount-base/host" --candidate-host "$RUNNER_TEMP/native-mount-candidate/host" \
+              --base-aot "$RUNNER_TEMP/native-mount-base/app" --candidate-aot "$RUNNER_TEMP/native-mount-candidate/app" \
+              --bun "$(command -v bun)" --bun-revision "$(bun -e 'console.log(Bun.revision)')" \
+              --base-commit d4074b2ee22cb5d6a9926cae9193bbbd6d2803ef --candidate-commit "$GITHUB_SHA" \
+              --output "$RUNNER_TEMP/native-mount-pairs"
+      - name: Retain observations and identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-mount-pairs-Linux-X64
+          path: |
+            ${{ runner.temp }}/native-mount-pairs/
+            ${{ runner.temp }}/native-mount-session/
+            ${{ runner.temp }}/native-mount-changed.txt
+            ${{ runner.temp }}/native-mount-host-sha256.txt
+            ${{ runner.temp }}/native-mount-base/*.json
+            ${{ runner.temp }}/native-mount-candidate/*.json
+            !${{ runner.temp }}/native-mount-session/runtime/
+          if-no-files-found: warn
+          retention-days: 30

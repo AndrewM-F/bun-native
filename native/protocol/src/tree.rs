@@ -739,6 +739,11 @@ impl Tree {
                     );
                 }
             }
+            // All non-root nodes were reached from the root, so every remaining
+            // attachment is either already validated or refers to a deleted node.
+            if seen.len() + 1 == self.nodes.len() && !seen.contains(&self.root_id) {
+                break;
+            }
         }
         if detached {
             return Err(error(

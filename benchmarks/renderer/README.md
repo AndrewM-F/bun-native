@@ -1,5 +1,18 @@
 # Shared renderer commit micro benchmark
 
+## Paired native mounts
+
+`native-mount.ts` mounts and disposes 42- and 128-row trees through a real
+window. It measures staging through the native acknowledgement, checks the
+revision and node count, and requires clean teardown. This is not a display
+presentation measurement. `native-mount-pairs.py` runs matching development and
+inspected AOT clients against separate release hosts, with fresh-process A/A
+controls and alternating baseline/candidate pairs. The manual
+`native-mount-pairs.yml` workflow pins the baseline and retains individual
+observations, source identities, process cleanup reports and failed trials.
+The result is scoped to its runner and does not by itself establish an
+application-wide or competitive performance gain.
+
 `commit.ts` mounts a shared `@bun-native/renderer` root in rows of
 `box > [text > text-node, button(onClick)]` and measures one acknowledged commit
 per sample in two scenarios:
