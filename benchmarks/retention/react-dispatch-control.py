@@ -274,6 +274,13 @@ def control_command(peer, module, binary, output, runtime):
     return command
 
 
+def expected_aot_jit(environ):
+    value = environ.get("CONTROL_AOT_EXPECT_JIT_PRESENT")
+    if value not in (None, "1"):
+        raise ValueError("Invalid JIT-present diagnostic setting")
+    return "present" if value == "1" else "unused"
+
+
 def main():
     peer = Path(sys.argv[1]).resolve()
     output = Path(sys.argv[2]).resolve()
@@ -458,7 +465,10 @@ def main():
                 check=True,
                 timeout=180,
             )
-        inspect = 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); console.log(JSON.stringify({graph,runtime},null,2)); if (!graph.hasCompiledProgram || runtime.jit !== "unused") throw new Error("Not AOT")'
+        # Only the separately labeled source-runtime diagnostic may require JIT
+        # present. Normal AOT controls continue to require the JIT to be unused.
+        expected_jit = expected_aot_jit(os.environ)
+        inspect = f'import {{ inspectBunExecutable }} from "./scripts/native/inspect.ts"; import {{ inspectBunRuntime }} from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); console.log(JSON.stringify({{graph,runtime}},null,2)); if (!graph.hasCompiledProgram || runtime.jit !== "{expected_jit}") throw new Error("Unexpected AOT or JIT inspection")'
         with (output / f"{variant}-inspection.json").open("wb") as log:
             subprocess.run(
                 [compiler, "-e", inspect, str(binary)],

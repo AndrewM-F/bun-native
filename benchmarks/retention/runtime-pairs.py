@@ -47,9 +47,12 @@ def observations_valid(records):
     )
 
 
-def control_environment(environ, revision, aot_reference=None):
+def control_environment(environ, revision, aot_reference=None, jit_present=False):
     env = {**environ, "CONTROL_EXPECTED_REVISION": revision}
     env.pop("CONTROL_AOT_REFERENCE_COMPILER", None)
+    env.pop("CONTROL_AOT_EXPECT_JIT_PRESENT", None)
+    if jit_present:
+        env["CONTROL_AOT_EXPECT_JIT_PRESENT"] = "1"
     if aot_reference is not None:
         env["CONTROL_AOT_REFERENCE_COMPILER"] = aot_reference
     return env
@@ -64,6 +67,7 @@ def main():
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--development-controls-only", action="store_true")
     parser.add_argument("--aot-reference", type=Path)
+    parser.add_argument("--aot-jit-present", action="store_true")
     parser.add_argument("--collector-trace", action="store_true")
     parser.add_argument("--collector-normal-edges", action="store_true")
     parser.add_argument("--collector-scan-slots", action="store_true")
@@ -72,6 +76,12 @@ def main():
     parser.add_argument("--collector-unwind", action="store_true")
     parser.add_argument("--collector-stack-limits", action="store_true")
     args = parser.parse_args()
+    if args.aot_jit_present and (
+        args.development_controls_only or args.aot_reference or args.collector_trace
+    ):
+        raise ValueError(
+            "JIT-present AOT diagnostics require two untraced source runtimes"
+        )
     if args.collector_trace and not args.development_controls_only:
         raise ValueError("Collector tracing is limited to the development runtime")
     if args.collector_normal_edges and not args.collector_trace:
@@ -114,13 +124,16 @@ def main():
         "pairs": args.pairs,
         "order": "baseline/candidate on even pairs; candidate/baseline on odd pairs",
         "scope": (
-            "Development runtime comparison only; AOT controls use the recorded reference compiler, not the candidate. No native input, paint or performance qualification."
+            "JIT-present AOT diagnostic only; not JIT-removed AOT qualification or performance evidence."
+            if args.aot_jit_present
+            else "Development runtime comparison only; AOT controls use the recorded reference compiler, not the candidate. No native input, paint or performance qualification."
             if args.development_controls_only
             else "Headless React retention controls; no native input, paint or performance qualification."
         ),
         "aotReferenceRuntime": aot_reference
         if args.development_controls_only
         else None,
+        "aotExpectedJit": "present" if args.aot_jit_present else "unused",
         "collectorTrace": args.collector_trace,
         "collectorNormalEdges": args.collector_normal_edges,
         "collectorScanSlots": args.collector_scan_slots,
@@ -150,6 +163,7 @@ def main():
                 os.environ,
                 revision,
                 aot_reference["path"] if args.development_controls_only else None,
+                jit_present=args.aot_jit_present,
             )
             env.pop("BN_COLLECTOR_TRACE_DIR", None)
             env.pop("BN_COLLECTOR_TRACE_REQUESTED", None)
@@ -180,7 +194,9 @@ def main():
             record = {
                 "trial": trial,
                 "variant": variant,
-                "comparisonScope": "development-only"
+                "comparisonScope": "jit-present-aot-diagnostic"
+                if args.aot_jit_present
+                else "development-only"
                 if args.development_controls_only
                 else "development-and-aot",
                 "valid": False,

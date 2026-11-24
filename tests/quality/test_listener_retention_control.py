@@ -16,6 +16,14 @@ SPEC.loader.exec_module(CONTROL)
 
 
 class ListenerRetentionControlTests(unittest.TestCase):
+    def test_aot_inspection_defaults_to_jit_unused(self):
+        self.assertEqual(CONTROL.expected_aot_jit({}), "unused")
+        self.assertEqual(
+            CONTROL.expected_aot_jit({"CONTROL_AOT_EXPECT_JIT_PRESENT": "1"}), "present"
+        )
+        with self.assertRaises(ValueError):
+            CONTROL.expected_aot_jit({"CONTROL_AOT_EXPECT_JIT_PRESENT": "0"})
+
     def test_controls_only_change_declared_lifetimes(self):
         source = (ROOT / "benchmarks/solid/react.tsx").read_text()
         baseline = CONTROL.listener_source(source, "baseline")
