@@ -1,423 +1,68 @@
 name: Benchmark comparison
-
-# Non-gating measurement job: never a required check. It records raw results
-# for core/Solid/React in development and AOT modes, including real XTest
-# input-to-native-paint latency, and uploads them as an artifact. A passed job
-# means every launch and equivalence check passed, not that performance improved.
 on:
   workflow_dispatch:
-    inputs:
-      trials:
-        description: Measured timed trials per artifact (3 to 30)
-        default: '5'
-      input-trials:
-        description: XTest click-to-paint launches per artifact (0, or 3 to 30)
-        default: '5'
-      cold-cache:
-        description: Sync and drop the page cache before every timed launch (sudo on the runner)
-        type: boolean
-        default: false
-      streaming-trials:
-        description: Streaming-list soaks per framework and mode (1 to 10)
-        default: '3'
-      concurrent-jit:
-        description: Diagnostic for #629. 'off' sets BUN_JSC_useConcurrentJIT=0 for every launch; assertions are unchanged
-        type: choice
-        options: ['on', 'off']
-        default: 'on'
-  schedule:
-    - cron: '47 6 * * 3'
-  pull_request:
-    branches: [main]
-    types: [opened, reopened, ready_for_review, synchronize]
-    paths:
-      - .github/workflows/benchmark-comparison.yml
-      - .github/actions/linux-native-prerequisites/**
-      - benchmarks/comparison/**
-      - benchmarks/rust-gpui/**
-      - native/gpui-host/examples/workload-baseline.rs
-      - benchmarks/solid/**
-      - benchmarks/streaming-list-fixture.ts
-      - tests/native/*streaming-list*
-      - scripts/quality/regression-check.ts
-      - scripts/quality/native-input-linux.py
-      - scripts/quality/native_harness/**
-
 permissions:
   contents: read
-
-concurrency:
-  group: benchmark-comparison-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  linux:
-    name: Linux core/Solid/React development and AOT comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
-    env:
-      CARGO_BUILD_JOBS: 2
-      CARGO_INCREMENTAL: 0
-      PYTHONDONTWRITEBYTECODE: 1
-      # Dispatch inputs reach the shell only through the environment.
-      TRIALS: ${{ github.event_name == 'workflow_dispatch' && inputs.trials || '5' }}
-      INPUT_TRIALS: ${{ github.event_name == 'workflow_dispatch' && inputs['input-trials'] || '5' }}
-      COLD_CACHE: ${{ github.event_name == 'workflow_dispatch' && inputs['cold-cache'] || 'false' }}
-      STREAMING_TRIALS: ${{ github.event_name == 'workflow_dispatch' && inputs['streaming-trials'] || '3' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Prepare result directory
-        run: |
-          mkdir "$RUNNER_TEMP/comparison"
-          echo "COMPARISON=$RUNNER_TEMP/comparison" >> "$GITHUB_ENV"
-      - name: Disable the concurrent JIT for this diagnostic dispatch (#629)
-        if: github.event_name == 'workflow_dispatch' && inputs['concurrent-jit'] == 'off'
-        run: echo 'BUN_JSC_useConcurrentJIT=0' >> "$GITHUB_ENV"
-      - name: Install the pinned Bun and Rust toolchains and downloads
-        id: toolchain
-        uses: ./.github/actions/native-toolchain
-      # The same index-verified archive set (and cache key) as Native Linux, so a
-      # mirror outage does not fail the comparison once Native Linux has cached it.
-      - name: Install native build and isolated X11 prerequisites
-        timeout-minutes: 25
-        uses: ./.github/actions/linux-native-prerequisites
-      - name: Build release native host
-        run: |
-          { time -p cargo build --locked --release --manifest-path Cargo.toml -p bun-native-host --bin bun-native-host; } 2>&1 | tee "$COMPARISON/host-build.log"
-          sha256sum target/release/bun-native-host > "$COMPARISON/host-sha256.txt"
-      - name: Build the direct Rust GPUI baseline
-        run: |
-          cargo build --locked --release --manifest-path Cargo.toml -p bun-native-host --example workload-baseline 2>&1 | tee "$COMPARISON/rust-baseline-build.log"
-          sha256sum target/release/examples/workload-baseline > "$COMPARISON/rust-baseline-sha256.txt"
-      - name: Run the equivalent-workload comparison in one isolated native session
-        timeout-minutes: 40
-        run: |
-          extra=()
-          if [[ "$COLD_CACHE" == 'true' ]]; then extra+=(--cold-cache); fi
-          bash scripts/quality/native-x11-session.sh \
-            "$COMPARISON/session" -- bun benchmarks/comparison/run.ts \
-            --host "$GITHUB_WORKSPACE/target/release/bun-native-host" --host-profile release \
-            --output "$COMPARISON/run" --trials "$TRIALS" --input-trials "$INPUT_TRIALS" \
-            "${extra[@]}"
-      # Same runner and session type, after the Bun Native trials. Its operation
-      # timings are state application, not acknowledgements; compare process metrics.
-      - name: Run the direct Rust GPUI baseline in one isolated native session
-        timeout-minutes: 10
-        run: |
-          bash scripts/quality/native-x11-session.sh \
-            "$COMPARISON/rust-session" -- bun benchmarks/rust-gpui/run.ts \
-            --binary "$GITHUB_WORKSPACE/target/release/examples/workload-baseline" \
-            --output "$COMPARISON/rust-gpui" --trials "$TRIALS"
-          {
-            echo '## Direct Rust GPUI baseline (same runner)'
-            echo
-            echo '| Metric | median | 95% CI |'
-            echo '| --- | --- | --- |'
-            jq -r '.summary.perLaunch | to_entries[] | select(.key | test("spawnTo|processWall|cpu|peakTree")) | "| \(.key) | \(.value.median) | \(.value.medianInterval.low) to \(.value.medianInterval.high) |"' "$COMPARISON/rust-gpui/rust-gpui.json"
-          } >> "$GITHUB_STEP_SUMMARY"
-      # The versioned streaming/virtualization fixture (#257) through Solid and
-      # React in development and AOT on the same host and runner. Each soak is
-      # one fresh launch and one sample per metric for the regression gate.
-      - name: Run the streaming-list fixture through Solid and React in development and AOT
-        if: ${{ !cancelled() && hashFiles('target/release/bun-native-host') != '' }}
-        timeout-minutes: 20
-        env:
-          BUN_NATIVE_HOST: ${{ github.workspace }}/target/release/bun-native-host
-        run: |
-          if [[ ! "$STREAMING_TRIALS" =~ ^([1-9]|10)$ ]]; then
-            echo "streaming-trials must be 1 to 10, got $STREAMING_TRIALS" >&2
-            exit 1
-          fi
-          mkdir -p "$COMPARISON/streaming"
-          for framework in solid react; do
-            entry="$framework-streaming-list"
-            package="$COMPARISON/streaming/$entry-package"
-            bun experiments/aot-gpui/build-window.ts \
-              --source "$GITHUB_WORKSPACE" --host "$BUN_NATIVE_HOST" \
-              --host-profile release --entry "$entry" --outdir "$package"
-            for trial in $(seq 1 "$STREAMING_TRIALS"); do
-              for mode in development aot; do
-                command=(bun "$package/development/application.js")
-                if [[ "$mode" == aot ]]; then
-                  command=("$package/$entry")
-                fi
-                evidence="$COMPARISON/streaming/$framework-$mode-$trial"
-                bash scripts/quality/native-x11-session.sh \
-                  "$evidence-session" -- python3 tests/native/streaming-list.py \
-                  --framework "$framework" --mode "$mode" --host-profile release \
-                  --output "$evidence" -- "${command[@]}"
-              done
-            done
-          done
-          python3 tests/native/streaming-list.py summarize \
-            --output "$COMPARISON/streaming/streaming-list-baseline.json" \
-            "$COMPARISON"/streaming/*-[0-9]*/result.json
-      - name: Export the compact record and summary table
-        if: ${{ always() && env.COMPARISON != '' }}
-        run: |
-          if [[ ! -f "$COMPARISON/run/comparison.json" ]]; then
-            echo 'The comparison wrote no comparison.json; the artifact keeps its logs.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          bun benchmarks/comparison/export.ts "$COMPARISON/run" "$COMPARISON/export" | tee "$COMPARISON/summary.md"
-          {
-            echo '## Equivalent-workload comparison (Linux, software renderer request)'
-            echo
-            jq -r '"Status: \(.status); failed launches: \(.failedLaunches // [] | length)"' "$COMPARISON/run/comparison.json"
-            echo
-            cat "$COMPARISON/summary.md"
-            echo
-            echo 'Click to native paint is the driver interval from immediately before the XTest click command to the validated complete native paint record; it is not display presentation. See benchmarks/COMPARISON.md.'
-          } >> "$GITHUB_STEP_SUMMARY"
-      # Regression gate (#259): per-launch samples against the committed baseline
-      # with the identical environment label. A model with no baseline is
-      # reported, not gated. Fails on a stable >25% regression or missing metric:
-      # two hosted VMs with the same CPU model measured identical code 12-15%
-      # apart (run 42432829952), so 10% is a dedicated-machine threshold.
-      - name: Regression gate against the committed baseline for this runner
-        if: ${{ !cancelled() && env.COMPARISON != '' }}
-        run: |
-          if [[ ! -f "$COMPARISON/export/comparison.json" ]]; then
-            echo 'No exported comparison, so nothing was gated; the comparison step failed.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          streaming=()
-          for result in "$COMPARISON"/streaming/*-[0-9]*/result.json; do
-            [[ -f "$result" ]] && streaming+=("$result")
-          done
-          bun benchmarks/comparison/metrics.ts export "$COMPARISON/export" \
-            --output "$COMPARISON/metrics.json" --streaming "${streaming[@]}"
-          status=0
-          bun benchmarks/comparison/metrics.ts gate "$COMPARISON/metrics.json" \
-            benchmarks/comparison/baselines --threshold 0.25 > "$COMPARISON/regression.md" || status=$?
-          {
-            echo '## Regression gate'
-            echo
-            cat "$COMPARISON/regression.md"
-          } >> "$GITHUB_STEP_SUMMARY"
-          cat "$COMPARISON/regression.md"
-          if [[ "$status" != 0 ]]; then
-            echo '::error title=Performance regression::A stable regression or missing metric against the committed baseline; see the Regression gate summary.'
-          fi
-          exit "$status"
-      - name: Retain raw results, including failures
-        if: ${{ always() && env.COMPARISON != '' }}
-        timeout-minutes: 3
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: benchmark-comparison-linux-${{ runner.arch }}
-          path: |
-            ${{ runner.temp }}/comparison/
-            !${{ runner.temp }}/comparison/run/*/application
-            !${{ runner.temp }}/comparison/session/runtime/
-            !${{ runner.temp }}/comparison/rust-session/runtime/
-            !${{ runner.temp }}/comparison/streaming/*-package/
-            !${{ runner.temp }}/comparison/streaming/*-session/runtime/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 30
-
-  # The same comparison and direct Rust GPUI baseline on a hosted Apple silicon
-  # VM (#244). XTest click-to-paint is Linux only, so input trials are 0 here.
-  # The hosted VM's paravirtual Metal device is not a physical GPU.
-  macos:
-    name: macOS core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: macos-15
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
-    env:
-      CARGO_INCREMENTAL: 0
-      PYTHONDONTWRITEBYTECODE: 1
-      TRIALS: ${{ github.event_name == 'workflow_dispatch' && inputs.trials || '5' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Prepare result directory
-        run: |
-          mkdir "$RUNNER_TEMP/comparison"
-          echo "COMPARISON=$RUNNER_TEMP/comparison" >> "$GITHUB_ENV"
-      - name: Disable the concurrent JIT for this diagnostic dispatch (#629)
-        if: github.event_name == 'workflow_dispatch' && inputs['concurrent-jit'] == 'off'
-        run: echo 'BUN_JSC_useConcurrentJIT=0' >> "$GITHUB_ENV"
-      - name: Install the pinned Bun and Rust toolchains and downloads
-        id: toolchain
-        uses: ./.github/actions/native-toolchain
-      - name: Build release native host and the direct Rust GPUI baseline
-        run: |
-          { time -p cargo build --locked --release --manifest-path Cargo.toml -p bun-native-host --bin bun-native-host --example workload-baseline; } 2>&1 | tee "$COMPARISON/host-build.log"
-          shasum -a 256 target/release/bun-native-host target/release/examples/workload-baseline > "$COMPARISON/binary-sha256.txt"
-          system_profiler SPDisplaysDataType SPHardwareDataType > "$COMPARISON/hardware.txt" 2>&1 || true
-      - name: Run the equivalent-workload comparison
-        timeout-minutes: 40
-        run: |
-          bun benchmarks/comparison/run.ts \
-            --host "$GITHUB_WORKSPACE/target/release/bun-native-host" --host-profile release \
-            --output "$COMPARISON/run" --trials "$TRIALS" --input-trials 0
-      - name: Run the direct Rust GPUI baseline
-        if: ${{ !cancelled() && hashFiles('target/release/examples/workload-baseline') != '' }}
-        timeout-minutes: 10
-        run: |
-          bun benchmarks/rust-gpui/run.ts \
-            --binary "$GITHUB_WORKSPACE/target/release/examples/workload-baseline" \
-            --output "$COMPARISON/rust-gpui" --trials "$TRIALS"
-      - name: Export the compact record and summary table
-        if: ${{ always() && env.COMPARISON != '' }}
-        run: |
-          if [[ -f "$COMPARISON/run/comparison.json" ]]; then
-            bun benchmarks/comparison/export.ts "$COMPARISON/run" "$COMPARISON/export" | tee "$COMPARISON/summary.md"
-            {
-              echo '## Equivalent-workload comparison (macOS, hosted VM)'
-              echo
-              jq -r '"Status: \(.status); failed launches: \(.failedLaunches // [] | length)"' "$COMPARISON/run/comparison.json"
-              echo
-              cat "$COMPARISON/summary.md"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-          if [[ -f "$COMPARISON/rust-gpui/rust-gpui.json" ]]; then
-            {
-              echo '## Direct Rust GPUI baseline (same runner)'
-              echo
-              echo '| Metric | median | 95% CI |'
-              echo '| --- | --- | --- |'
-              jq -r '.summary.perLaunch | to_entries[] | select(.key | test("spawnTo|processWall|cpu|peakTree")) | "| \(.key) | \(.value.median) | \(.value.medianInterval.low) to \(.value.medianInterval.high) |"' "$COMPARISON/rust-gpui/rust-gpui.json"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Retain raw results, including failures
-        if: ${{ always() && env.COMPARISON != '' }}
-        timeout-minutes: 3
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: benchmark-comparison-macos-${{ runner.arch }}
-          path: |
-            ${{ runner.temp }}/comparison/
-            !${{ runner.temp }}/comparison/run/*/application
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 30
-
-  # The same comparison and direct Rust GPUI baseline on a hosted Windows x64
-  # VM (#244). XTest click-to-paint is Linux only, so input trials are 0 here.
-  # Process-tree working set, CPU time and load come from
-  # benchmarks/comparison/windows-processes.ts. The VM has no physical GPU.
-  windows:
-    name: Windows core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+  nonleaf-windows:
+    name: Windows source-matched guard-cost control
+    if: vars.CI_BILLING_PAUSED == 'false'
     runs-on: windows-2022
-    timeout-minutes: 75
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
-    env:
-      CARGO_INCREMENTAL: 0
-      PYTHONDONTWRITEBYTECODE: 1
-      TRIALS: ${{ github.event_name == 'workflow_dispatch' && inputs.trials || '5' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
         with:
           persist-credentials: false
-      - name: Prepare result directory
+      - uses: ./.github/actions/native-toolchain
+        with:
+          install: 'false'
+      - name: Build matching baseline and candidate controls
         run: |
-          $comparison = Join-Path $env:RUNNER_TEMP 'comparison'
-          New-Item -ItemType Directory $comparison | Out-Null
-          "COMPARISON=$comparison" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Disable the concurrent JIT for this diagnostic dispatch (#629)
-        if: github.event_name == 'workflow_dispatch' && inputs['concurrent-jit'] == 'off'
-        run: "'BUN_JSC_useConcurrentJIT=0' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8"
-      - name: Install the pinned Bun and Rust toolchains and downloads
-        id: toolchain
-        uses: ./.github/actions/native-toolchain
-      - name: Locate the installed Windows SDK shader compiler
+          $root = Join-Path $env:RUNNER_TEMP 'nonleaf-control'
+          New-Item -ItemType Directory $root | Out-Null
+          "EVIDENCE=$root" >> $env:GITHUB_ENV
+          $tree = 'native/protocol/src/tree.rs'
+          if ((Get-FileHash $tree -Algorithm SHA256).Hash.ToLowerInvariant() -ne '3965647d1a316442adfddbab00663fe78eef5cfa38d62606586e6a74255dd177') { throw 'Baseline source mismatch' }
+          $fixture = 'benchmarks/protocol/leaf-ancestor-diagnostic.rs'
+          if ((Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant() -ne '782018c4412e7437326fa666c52909eff5b0b115c333ec8ea86b2f50162d8fe9') { throw 'Fixture mismatch' }
+          Copy-Item $fixture native/protocol/examples/leaf_ancestor_perf.rs
+          cargo build --locked --release -p bun-native-protocol --example leaf_ancestor_perf
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline build failed' }
+          Copy-Item target/release/examples/leaf_ancestor_perf.exe (Join-Path $root 'baseline.exe')
+          python benchmarks/protocol/nonleaf-candidate.py
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate source did not match' }
+          cargo test --locked -p bun-native-protocol
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate protocol tests failed' }
+          cargo build --locked --release -p bun-native-protocol --example leaf_ancestor_perf
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate build failed' }
+          Copy-Item target/release/examples/leaf_ancestor_perf.exe (Join-Path $root 'candidate.exe')
+          $baseHash = (Get-FileHash (Join-Path $root 'baseline.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          $candidateHash = (Get-FileHash (Join-Path $root 'candidate.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($baseHash -eq $candidateHash) { throw 'Binaries must be distinct' }
+          @{ head = $env:GITHUB_SHA; baselineTree = '3965647d1a316442adfddbab00663fe78eef5cfa38d62606586e6a74255dd177'; candidateTree = '77f45759baff22d5dd33093a46d3858ba872ba137da3abd53e1aae5a7e3bc1a3'; fixture = '782018c4412e7437326fa666c52909eff5b0b115c333ec8ea86b2f50162d8fe9'; rustc = (rustc --version); scope = 'in-process protocol preflight only' } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'metadata.json')
+      - name: Run alternating A/A and two independent A/B controls
         run: |
-          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
-          $fxc = Get-ChildItem -Directory $sdk |
-            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
-            Sort-Object { [version]$_.Name } -Descending |
-            ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } |
-            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-            Select-Object -First 1
-          if (!$fxc) { throw 'GPUI release shaders require the Windows SDK fxc.exe' }
-          "GPUI_FXC_PATH=$fxc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Build release native host and the direct Rust GPUI baseline
-        run: |
-          $timer = [Diagnostics.Stopwatch]::StartNew()
-          cargo build --locked --release --manifest-path Cargo.toml -p bun-native-host --bin bun-native-host --example workload-baseline 2>&1 |
-            Tee-Object -FilePath (Join-Path $env:COMPARISON 'host-build.log')
-          $code = $LASTEXITCODE
-          "real $($timer.Elapsed.TotalSeconds)" | Out-File -Append (Join-Path $env:COMPARISON 'host-build.log')
-          if ($code -ne 0) { throw "Native build failed: $code" }
-          Get-FileHash -Algorithm SHA256 target/release/bun-native-host.exe, target/release/examples/workload-baseline.exe |
-            Format-List | Out-File (Join-Path $env:COMPARISON 'binary-sha256.txt')
-          & {
-            Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture
-            Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed
-            Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, AdapterRAM, VideoModeDescription
-            "ImageOS=$env:ImageOS ImageVersion=$env:ImageVersion"
-          } | Format-List | Out-File (Join-Path $env:COMPARISON 'hardware.txt')
-      - name: Run the equivalent-workload comparison
-        timeout-minutes: 45
-        run: |
-          bun benchmarks/comparison/run.ts `
-            --host (Join-Path $env:GITHUB_WORKSPACE 'target/release/bun-native-host.exe') --host-profile release `
-            --output (Join-Path $env:COMPARISON 'run') --trials $env:TRIALS --input-trials 0
-          if ($LASTEXITCODE -ne 0) { throw "The comparison exited $LASTEXITCODE" }
-      - name: Run the direct Rust GPUI baseline
-        if: ${{ !cancelled() && hashFiles('target/release/examples/workload-baseline.exe') != '' }}
-        timeout-minutes: 10
-        run: |
-          bun benchmarks/rust-gpui/run.ts `
-            --binary (Join-Path $env:GITHUB_WORKSPACE 'target/release/examples/workload-baseline.exe') `
-            --output (Join-Path $env:COMPARISON 'rust-gpui') --trials $env:TRIALS
-          if ($LASTEXITCODE -ne 0) { throw "The Rust GPUI baseline exited $LASTEXITCODE" }
-      - name: Export the compact record and summary table
-        if: ${{ always() && env.COMPARISON != '' }}
-        run: |
-          $comparison = Join-Path $env:COMPARISON 'run/comparison.json'
-          if (Test-Path -LiteralPath $comparison) {
-            bun benchmarks/comparison/export.ts (Join-Path $env:COMPARISON 'run') (Join-Path $env:COMPARISON 'export') |
-              Tee-Object -FilePath (Join-Path $env:COMPARISON 'summary.md')
-            if ($LASTEXITCODE -ne 0) { throw "The export exited $LASTEXITCODE" }
-            $record = Get-Content -Raw $comparison | ConvertFrom-Json
-            $failedLaunches = ($record.failedLaunches | Measure-Object).Count
-            & {
-              '## Equivalent-workload comparison (Windows, hosted VM)'
-              ''
-              "Status: $($record.status); failed launches: $failedLaunches"
-              ''
-              Get-Content -Raw (Join-Path $env:COMPARISON 'summary.md')
-            } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $root = Join-Path $env:RUNNER_TEMP 'nonleaf-control'
+          python benchmarks/protocol/nonleaf-pairs.py (Join-Path $root 'baseline.exe') (Join-Path $root 'baseline.exe') (Join-Path $root 'aa.json') (Join-Path $root 'metadata.json')
+          if ($LASTEXITCODE -ne 0) { throw 'A/A control failed' }
+          foreach ($name in @('ab', 'ab-repeat')) {
+            python benchmarks/protocol/nonleaf-pairs.py (Join-Path $root 'baseline.exe') (Join-Path $root 'candidate.exe') (Join-Path $root "$name.json") (Join-Path $root 'metadata.json')
+            if ($LASTEXITCODE -ne 0) { throw "$name control failed" }
           }
-          $rust = Join-Path $env:COMPARISON 'rust-gpui/rust-gpui.json'
-          if (Test-Path -LiteralPath $rust) {
-            $baseline = Get-Content -Raw $rust | ConvertFrom-Json
-            & {
-              '## Direct Rust GPUI baseline (same runner)'
-              ''
-              '| Metric | median | 95% CI |'
-              '| --- | --- | --- |'
-              $baseline.summary.perLaunch.PSObject.Properties |
-                Where-Object { $_.Name -match 'spawnTo|processWall|cpu|peakTree' } |
-                ForEach-Object { "| $($_.Name) | $($_.Value.median) | $($_.Value.medianInterval.low) to $($_.Value.medianInterval.high) |" }
-            } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          }
-      - name: Retain raw results, including failures
-        if: ${{ always() && env.COMPARISON != '' }}
-        timeout-minutes: 3
+      - name: Retain controls
+        if: always() && env.EVIDENCE != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: benchmark-comparison-windows-${{ runner.arch }}
+          name: windows-guard-cost-control
           path: |
-            ${{ runner.temp }}/comparison/
-            !${{ runner.temp }}/comparison/run/*/application.exe
-          include-hidden-files: true
-          if-no-files-found: error
+            ${{ runner.temp }}/nonleaf-control/
+            !${{ runner.temp }}/nonleaf-control/*.exe
+          if-no-files-found: warn
           retention-days: 30
