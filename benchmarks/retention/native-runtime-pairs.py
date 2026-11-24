@@ -75,15 +75,30 @@ def mode_settings(args):
     return aot, calibration, performance, mounts, iterations
 
 
+def adapter_settings(args):
+    adapter = "react"
+    if args and args[-1].startswith("--adapter="):
+        adapter = args[-1].split("=", 1)[1]
+        args = args[:-1]
+    if adapter not in ("react", "core", "solid"):
+        raise ValueError("Unknown adapter")
+    if adapter != "react" and args not in (
+        ["--aot-jit-present"],
+        ["--aot-jit-present-calibration"],
+        ["--aot-jit-present-extended"],
+    ):
+        raise ValueError("Non-React adapter is limited to JIT-present AOT diagnostics")
+    return adapter, args
+
+
 def main():
     if os.name != "nt" or os.environ.get("GITHUB_ACTIONS") != "true":
         raise ValueError("Native control requires a disposable Windows Actions runner")
     if any(key.startswith("BUN_JSC_") for key in os.environ):
         raise ValueError("Unexpected inherited JSC options")
-    aot, calibration, performance, mounts, iterations = mode_settings(sys.argv[6:])
-    pair_count = (
-        12 if performance or sys.argv[6:] == ["--aot-jit-present-extended"] else 3
-    )
+    adapter, mode_args = adapter_settings(sys.argv[6:])
+    aot, calibration, performance, mounts, iterations = mode_settings(mode_args)
+    pair_count = 12 if performance or mode_args == ["--aot-jit-present-extended"] else 3
     host, module, baseline, candidate = [
         Path(x).resolve(strict=True) for x in sys.argv[1:5]
     ]
@@ -101,7 +116,7 @@ def main():
                 "order": "alternating AB/BA; one baseline A/A pair after every two AB pairs"
                 if performance
                 else "alternating AB/BA",
-                "scope": f"Actual native React {'JIT-present compiled-program diagnostic' if aot else 'development'} workload, {iterations} updates and rotations, {mounts} mount cycles, calibration={calibration}, DFG {'default' if performance or aot else 'disabled'}; not trimmed AOT or cross-product performance qualification.",
+                "scope": f"Actual native {adapter} {'JIT-present compiled-program diagnostic' if aot else 'development'} workload, {iterations} updates and rotations, {mounts} mount cycles, calibration={calibration}, DFG {'default' if performance or aot else 'disabled'}; not trimmed AOT or cross-product performance qualification.",
             },
             indent=2,
         )
@@ -182,7 +197,7 @@ def main():
             )
             record["valid"] = (
                 data.get("nonce") == nonce
-                and data.get("adapter") == "react"
+                and data.get("adapter") == adapter
                 and data.get("declaredMode") == ("aot" if aot else "development")
                 and data.get("bunRevision") == revision
                 and str(data.get("executable", "")).lower()

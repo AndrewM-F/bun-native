@@ -27,6 +27,25 @@ def report(nonce="same"):
 
 
 class NativeRuntimePairsTest(unittest.TestCase):
+    def test_non_react_adapters_require_jit_present_aot(self):
+        self.assertEqual(
+            PAIRS.adapter_settings(["--aot-jit-present", "--adapter=core"]),
+            ("core", ["--aot-jit-present"]),
+        )
+        self.assertEqual(
+            PAIRS.adapter_settings(
+                ["--aot-jit-present-calibration", "--adapter=solid"]
+            ),
+            ("solid", ["--aot-jit-present-calibration"]),
+        )
+        for args in (
+            ["--adapter=core"],
+            ["--performance", "--adapter=solid"],
+            ["--aot-jit-present", "--adapter=unknown"],
+        ):
+            with self.assertRaises(ValueError):
+                PAIRS.adapter_settings(args)
+
     def test_jit_present_aot_modes_are_explicit_and_separate(self):
         self.assertEqual(PAIRS.mode_settings([]), (False, False, False, 100, 20))
         self.assertEqual(
