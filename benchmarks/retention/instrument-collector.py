@@ -219,7 +219,7 @@ def main():
         if declaration is not None
         else None,
         "machineStackSha256": sha(machine) if machine is not None else None,
-        "scope": "Opt-in diagnostic runtime; traces conservative matches and hidden visitor calls around explicit Bun.gc. Concurrent VMs and uninstrumented paths are not attributed; missing events never prove absence and overflow invalidates the trace.",
+        "scope": "Opt-in diagnostic runtime; eventKinds lists recorded collector paths around explicit Bun.gc. Concurrent VMs and uninstrumented paths are not attributed; missing events never prove absence and overflow invalidates the trace.",
     }
     # The checkout is ephemeral; fail on any mismatch before changing any file.
     for path, data in zip(paths, adjusted, strict=True):

@@ -16,12 +16,17 @@ import sys
 from pathlib import Path
 
 
-def inspect_collector_traces(directory, normal_edges=False, scan_slots=False):
+def inspect_collector_traces(
+    directory, normal_edges=False, scan_slots=False, scan_origins=False
+):
+    if scan_origins and not scan_slots:
+        raise ValueError("Origin tracing requires slot tracing")
     if scan_slots and not normal_edges:
         raise ValueError("Slot tracing requires normal-edge tracing")
     expected_kinds = (
         {1, 2, 3, 4, 5} if scan_slots else {1, 2, 3} if normal_edges else {1, 2}
     )
+    allowed_kinds = expected_kinds | ({6, 7, 8} if scan_origins else set())
     files = sorted(directory.glob("bn-gc-*.bin"))
     if not files:
         raise ValueError("Instrumented development process emitted no collector traces")
@@ -51,7 +56,7 @@ def inspect_collector_traces(directory, normal_edges=False, scan_slots=False):
                 if len(block) % 24:
                     raise ValueError("Incomplete collector trace record")
                 for _, target, kind, reserved in struct.iter_unpack("<QQII", block):
-                    if not target or kind not in expected_kinds or reserved:
+                    if not target or kind not in allowed_kinds or reserved:
                         raise ValueError("Malformed collector trace record")
                     event_kinds.add(kind)
         results.append(
@@ -62,7 +67,9 @@ def inspect_collector_traces(directory, normal_edges=False, scan_slots=False):
                 "sha256": digest(path),
             }
         )
-    if event_kinds != expected_kinds:
+    if not expected_kinds.issubset(event_kinds) or (
+        scan_origins and not event_kinds.intersection({6, 7, 8})
+    ):
         raise ValueError("Collector trace did not exercise all requested paths")
     return results
 
@@ -185,10 +192,13 @@ def main():
     trace_requested = os.environ.get("BN_COLLECTOR_TRACE_REQUESTED") == "1"
     normal_edges = os.environ.get("BN_COLLECTOR_TRACE_NORMAL_EDGES") == "1"
     scan_slots = os.environ.get("BN_COLLECTOR_TRACE_SCAN_SLOTS") == "1"
+    scan_origins = os.environ.get("BN_COLLECTOR_TRACE_SCAN_ORIGINS") == "1"
     if normal_edges and not trace_requested:
         raise ValueError("Normal-edge tracing requires collector tracing")
     if scan_slots and not normal_edges:
         raise ValueError("Slot tracing requires normal-edge tracing")
+    if scan_origins and not scan_slots:
+        raise ValueError("Origin tracing requires slot tracing")
     output.mkdir(parents=True, exist_ok=False)
     plan = {
         "revision": revision,
@@ -211,6 +221,7 @@ def main():
         "collectorTraceRequested": trace_requested,
         "collectorTraceNormalEdges": normal_edges,
         "collectorTraceScanSlots": scan_slots,
+        "collectorTraceScanOrigins": scan_origins,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     results = []
@@ -224,6 +235,7 @@ def main():
             env.pop("BN_COLLECTOR_TRACE_REQUESTED", None)
             env.pop("BN_COLLECTOR_TRACE_NORMAL_EDGES", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_SLOTS", None)
+            env.pop("BN_COLLECTOR_TRACE_SCAN_ORIGINS", None)
             env.pop("BN_COLLECTOR_TRACE_DIR", None)
             trace_directory = output / f"{trial:02}-{mode}-collector-trace"
             if trace_requested and mode == "development":
@@ -286,6 +298,7 @@ def main():
                         trace_directory,
                         normal_edges=normal_edges,
                         scan_slots=scan_slots,
+                        scan_origins=scan_origins,
                     )
                     if trace_requested and mode == "development"
                     else None

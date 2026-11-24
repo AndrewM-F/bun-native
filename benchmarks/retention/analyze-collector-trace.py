@@ -13,7 +13,9 @@ import struct
 from pathlib import Path
 
 
-def trace_paths(path, targets, scan_slots=False):
+def trace_paths(path, targets, scan_slots=False, scan_origins=False):
+    if scan_origins and not scan_slots:
+        raise ValueError("Origin tracing requires slot tracing")
     data = path.read_bytes()
     if len(data) < 40:
         raise ValueError("Truncated trace header")
@@ -32,13 +34,21 @@ def trace_paths(path, targets, scan_slots=False):
     incoming = collections.defaultdict(set)
     slots = collections.defaultdict(set)
     spans = set()
+    origins = collections.defaultdict(set)
     kinds = set()
     for source, target, kind, reserved in struct.iter_unpack(
         "<QQII", memoryview(data)[40:]
     ):
         if (
             not target
-            or kind not in ({1, 2, 3, 4, 5} if scan_slots else {1, 2, 3})
+            or kind
+            not in (
+                {1, 2, 3, 4, 5, 6, 7, 8}
+                if scan_origins
+                else {1, 2, 3, 4, 5}
+                if scan_slots
+                else {1, 2, 3}
+            )
             or reserved
         ):
             raise ValueError("Malformed trace record")
@@ -55,7 +65,20 @@ def trace_paths(path, targets, scan_slots=False):
             if not source or source >= target:
                 raise ValueError("Invalid scanned span")
             spans.add((source, target))
-    if kinds != ({1, 2, 3, 4, 5} if scan_slots else {1, 2, 3}):
+        elif kind in (6, 7, 8):
+            if not source or source == target:
+                raise ValueError("Invalid origin span")
+            origins[tuple(sorted((source, target)))].add(
+                {
+                    6: "conducting-stack",
+                    7: "saved-registers",
+                    8: "copied-thread-stacks",
+                }[kind]
+            )
+    expected = {1, 2, 3, 4, 5} if scan_slots else {1, 2, 3}
+    if not expected.issubset(kinds) or (
+        scan_origins and not kinds.intersection({6, 7, 8})
+    ):
         raise ValueError("Trace lacks one or more requested event kinds")
     paths = []
     for target in targets:
@@ -81,7 +104,13 @@ def trace_paths(path, targets, scan_slots=False):
                     {
                         "slot": hex(slot),
                         "candidateSpans": [
-                            [hex(start), hex(end)]
+                            {
+                                "start": hex(start),
+                                "end": hex(end),
+                                "originEvents": sorted(origins[(start, end)]),
+                            }
+                            if scan_origins
+                            else [hex(start), hex(end)]
                             for start, end in sorted(spans)
                             if start <= slot < end
                         ],
@@ -106,10 +135,17 @@ def main():
     parser.add_argument("trace", type=Path)
     parser.add_argument("target", nargs="+", type=lambda value: int(value, 0))
     parser.add_argument("--scan-slots", action="store_true")
+    parser.add_argument("--scan-origins", action="store_true")
     args = parser.parse_args()
     print(
         json.dumps(
-            trace_paths(args.trace, args.target, scan_slots=args.scan_slots), indent=2
+            trace_paths(
+                args.trace,
+                args.target,
+                scan_slots=args.scan_slots,
+                scan_origins=args.scan_origins,
+            ),
+            indent=2,
         )
     )
 

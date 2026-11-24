@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--collector-trace", action="store_true")
     parser.add_argument("--collector-normal-edges", action="store_true")
     parser.add_argument("--collector-scan-slots", action="store_true")
+    parser.add_argument("--collector-scan-origins", action="store_true")
     args = parser.parse_args()
     if args.collector_trace and not args.development_controls_only:
         raise ValueError("Collector tracing is limited to the development runtime")
@@ -73,6 +74,8 @@ def main():
         raise ValueError("Normal-edge tracing requires collector tracing")
     if args.collector_scan_slots and not args.collector_normal_edges:
         raise ValueError("Slot tracing requires normal-edge tracing")
+    if args.collector_scan_origins and not args.collector_scan_slots:
+        raise ValueError("Origin tracing requires slot tracing")
     if not 1 <= args.pairs <= 5:
         raise ValueError("pairs must be in 1..5")
     if any(name.startswith("BUN_JSC_") for name in os.environ):
@@ -102,6 +105,7 @@ def main():
         "collectorTrace": args.collector_trace,
         "collectorNormalEdges": args.collector_normal_edges,
         "collectorScanSlots": args.collector_scan_slots,
+        "collectorScanOrigins": args.collector_scan_origins,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     records = []
@@ -131,12 +135,15 @@ def main():
             env.pop("BN_COLLECTOR_TRACE_REQUESTED", None)
             env.pop("BN_COLLECTOR_TRACE_NORMAL_EDGES", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_SLOTS", None)
+            env.pop("BN_COLLECTOR_TRACE_SCAN_ORIGINS", None)
             if args.collector_trace and variant == "candidate":
                 env["BN_COLLECTOR_TRACE_REQUESTED"] = "1"
                 if args.collector_normal_edges:
                     env["BN_COLLECTOR_TRACE_NORMAL_EDGES"] = "1"
                 if args.collector_scan_slots:
                     env["BN_COLLECTOR_TRACE_SCAN_SLOTS"] = "1"
+                if args.collector_scan_origins:
+                    env["BN_COLLECTOR_TRACE_SCAN_ORIGINS"] = "1"
             record = {
                 "trial": trial,
                 "variant": variant,

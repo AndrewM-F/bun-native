@@ -74,6 +74,29 @@ class CollectorPathTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ANALYZE.trace_paths(trace, [3])
 
+    def test_origin_labels_require_exact_span_match(self):
+        with tempfile.TemporaryDirectory() as temp:
+            trace = Path(temp) / "trace.bin"
+            write_trace(
+                trace,
+                [
+                    (100, 1, 1, 0),
+                    (1, 2, 3, 0),
+                    (2, 3, 2, 0),
+                    (120, 1, 4, 0),
+                    (100, 200, 5, 0),
+                    (200, 100, 6, 0),
+                    (90, 210, 8, 0),
+                ],
+            )
+            result = ANALYZE.trace_paths(trace, [3], scan_slots=True, scan_origins=True)
+            span = result["paths"][0]["path"][0]["candidateSlots"][0]["candidateSpans"][
+                0
+            ]
+            self.assertEqual(span["originEvents"], ["conducting-stack"])
+            with self.assertRaises(ValueError):
+                ANALYZE.trace_paths(trace, [3], scan_slots=True)
+
 
 if __name__ == "__main__":
     unittest.main()
