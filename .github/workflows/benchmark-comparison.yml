@@ -732,7 +732,7 @@ jobs:
           $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
           if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
           $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
-          if ($manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'cf5598296da736c817c4321f007c11d76ebe6212442d34d2b124bc02ba4c9a7c') { throw 'Libuv control identity mismatch' }
+          if ($manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '379c7a1859166bd415e28f97412b4e5b0fab221bb438e40e8bd5c17b6698cce8' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'cf5598296da736c817c4321f007c11d76ebe6212442d34d2b124bc02ba4c9a7c') { throw 'Libuv control identity mismatch' }
           if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
           "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
           "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
