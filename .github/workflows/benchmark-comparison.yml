@@ -17,6 +17,7 @@ on:
             'batch-release',
             'listener',
             'safe-listener',
+            'react-empty-unmount',
             'core-ownership',
             'core-group',
             'fixture-core-matrix',
@@ -1310,6 +1311,41 @@ jobs:
           path: |
             ${{ runner.temp }}/batch-release-control/
             !${{ runner.temp }}/batch-release-control/**/*.exe
+          retention-days: 30
+
+  windows-react-empty-unmount:
+    name: Windows experimental React unmount control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'react-empty-unmount'
+    runs-on: windows-2022
+    timeout-minutes: 70
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Build peer and compare source variants with deliberate pins
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'react-unmount-control'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $env:RUNNER_TEMP 'react-unmount-peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Headless peer build failed' }
+          python benchmarks/retention/react-unmount-control.py (Join-Path $env:RUNNER_TEMP 'react-unmount-peer.exe') $root
+          if ($LASTEXITCODE -ne 0) { throw 'A paired source or pin control was invalid' }
+      - name: Retain all observations, including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-react-unmount-control
+          path: |
+            ${{ runner.temp }}/react-unmount-control/
+            !${{ runner.temp }}/react-unmount-control/**/*.exe
+          if-no-files-found: warn
           retention-days: 30
 
   windows-fixture-core-matrix:
