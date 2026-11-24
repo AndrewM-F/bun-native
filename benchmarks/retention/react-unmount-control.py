@@ -5,6 +5,7 @@ Two empty commits may affect other React roots; this is not a production fix.
 """
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -44,6 +45,21 @@ def pin_source(source):
     )
 
 
+def safe_fixture(source):
+    path = Path("benchmarks/retention/react-dispatch-control.py")
+    spec = importlib.util.spec_from_file_location("react_dispatch_control", path)
+    if spec is None or spec.loader is None:
+        raise ValueError("Listener diagnostic source is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = module.listener_source(source, "safe-clear")
+    return replace_once(
+        source,
+        " listener = undefined; view = undefined!;",
+        " listener = undefined; view = undefined!; setText = undefined!; setRows = undefined!;",
+    )
+
+
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -63,6 +79,11 @@ def main():
     output.mkdir(exist_ok=False)
     original_mount = Path("packages/react/src/mount.ts").read_text(encoding="utf8")
     original_entry = Path("benchmarks/solid/react.tsx").read_text(encoding="utf8")
+    fixture_mode = sys.argv[3] if len(sys.argv) > 3 else "original"
+    if fixture_mode not in ("original", "safe"):
+        raise ValueError("Unknown fixture mode")
+    if fixture_mode == "safe":
+        original_entry = safe_fixture(original_entry)
     variants = ("baseline", "candidate", "baseline-pin", "candidate-pin")
     sources = {
         "baseline-mount": original_mount,
@@ -75,6 +96,7 @@ def main():
     plan = {
         "variants": variants,
         "pairs": 5,
+        "fixtureMode": fixture_mode,
         "order": "forward then reverse on alternating pairs",
         "peerSha256": digest(peer),
         "runtimeSha256": digest(Path(runtime)),
