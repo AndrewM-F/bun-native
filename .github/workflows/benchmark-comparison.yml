@@ -1877,6 +1877,9 @@ jobs:
             (Test-Path (Join-Path $_ 'clang.exe')) -and ((& (Join-Path $_ 'clang.exe') --version | Select-Object -First 1) -match 'clang version 23\.1\.1')
           } | Select-Object -First 1
           if (-not $llvmDir) { throw 'Verified LLVM 23.1.1 executable not found' }
+          if ($env:RETENTION_DIAGNOSTIC -in @('runtime-libuv-native-trim-build', 'runtime-libuv-poll-clear-trim-build')) {
+            & (Join-Path $env:GITHUB_WORKSPACE 'benchmarks/retention/install-llvm-undname.ps1') -Destination $llvmDir
+          }
           $env:PATH = "$llvmDir;C:\Program Files\NASM;$cleanPath;C:\Program Files\Git\usr\bin;C:\cygwin64\bin"
           $env:BUN_WEBKIT_PATH = 'D:\w'
           $env:RUSTUP_TOOLCHAIN = 'nightly-2026-09-15'
@@ -2148,8 +2151,14 @@ jobs:
     name: Windows runtime build preflight
     if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Verify pinned Windows demangler
+        shell: pwsh
+        run: ./benchmarks/retention/install-llvm-undname.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'llvm-undname-preflight')
       - name: Inspect available build tools and disk space
         shell: pwsh
         run: |
