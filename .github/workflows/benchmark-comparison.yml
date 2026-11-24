@@ -294,6 +294,7 @@ jobs:
           if ($binary.Count -ne 1 -or $manifests.Count -ne 1) { throw 'Expected one trace runtime and manifest' }
           $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
           if ($manifest.headerSha256 -ne '18996262a48ecdffd789761c6283a9bcd2b55b955415f89bd44da041987054db' -or $manifest.originalSha256[0] -ne '22102e605c012f0134a35c1191f7f4ebb159836fcc8dd078103abcf5de26ff3f' -or $manifest.originalSha256[1] -ne '4d8bff93828c52d141a631f2c261a349b0c122b0aab81290262566d339ff901b' -or $manifest.originalSha256[2] -ne '691b8688cc95a88ae35832dd9b58b368914ad12c89ea8532977ea33e6226d45e') { throw 'Trace source identity did not match' }
+          if ($manifest.instrumentedSha256[0] -ne 'a2425a80c34d0029c127692ad67f29d7537071a2ab5e42082243e2546b6eda07' -or $manifest.instrumentedSha256[1] -ne '1e3b58a172768642faaa2997c754ce6cf6639d0fae20c807f28216ee213c97d5' -or $manifest.instrumentedSha256[2] -ne 'a0d8e2b25db1d2234f230fa6294ba4038190bf87b8a2471a1e08f1efbaf2fc80') { throw 'Trace instrumentation did not match the reviewed source' }
           "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
       - name: Compare pinned and instrumented development runtimes
         run: |

@@ -33,8 +33,15 @@ class RetentionScanDiagnosticTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 CONTROL.inspect_collector_traces(directory)
             trace.write_bytes(header(1, 1) + bytes(24))
+            with self.assertRaises(ValueError):
+                CONTROL.inspect_collector_traces(directory)
+            trace.write_bytes(
+                header(2, 2)
+                + struct.pack("<QQII", 1, 2, 1, 0)
+                + struct.pack("<QQII", 2, 3, 2, 0)
+            )
             self.assertEqual(
-                CONTROL.inspect_collector_traces(directory)[0]["records"], 1
+                CONTROL.inspect_collector_traces(directory)[0]["records"], 2
             )
 
     def test_setting_and_effective_dump(self):

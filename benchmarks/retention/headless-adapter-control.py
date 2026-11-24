@@ -21,6 +21,7 @@ def inspect_collector_traces(directory):
     if not files:
         raise ValueError("Instrumented development process emitted no collector traces")
     results = []
+    event_kinds = set()
     for path in files:
         with path.open("rb") as stream:
             header = stream.read(40)
@@ -39,6 +40,15 @@ def inspect_collector_traces(directory):
             or path.stat().st_size != 40 + written * stride
         ):
             raise ValueError("Invalid or overflowed collector trace")
+        with path.open("rb") as stream:
+            stream.seek(40)
+            while block := stream.read(24 * 4096):
+                if len(block) % 24:
+                    raise ValueError("Incomplete collector trace record")
+                for _, target, kind, reserved in struct.iter_unpack("<QQII", block):
+                    if not target or kind not in (1, 2) or reserved:
+                        raise ValueError("Malformed collector trace record")
+                    event_kinds.add(kind)
         results.append(
             {
                 "file": path.name,
@@ -47,6 +57,8 @@ def inspect_collector_traces(directory):
                 "sha256": digest(path),
             }
         )
+    if event_kinds != {1, 2}:
+        raise ValueError("Collector trace did not exercise both recorded paths")
     return results
 
 
