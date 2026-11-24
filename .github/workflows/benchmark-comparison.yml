@@ -782,6 +782,10 @@ jobs:
         with:
           release-target: 'true'
           remap-cargo-home: 'true'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
       - name: Verify and download both pinned source builds
         env:
           GH_TOKEN: ${{ github.token }}
@@ -868,6 +872,10 @@ jobs:
       - uses: ./.github/actions/native-toolchain
         with:
           rust: 'false'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
       - name: Verify and download both pinned source builds
         env:
           GH_TOKEN: ${{ github.token }}
@@ -939,6 +947,10 @@ jobs:
         with:
           release-target: 'true'
           remap-cargo-home: 'true'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
       - name: Verify and download both pinned source builds
         env:
           GH_TOKEN: ${{ github.token }}
