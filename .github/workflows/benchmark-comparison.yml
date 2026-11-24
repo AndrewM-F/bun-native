@@ -1440,7 +1440,7 @@ jobs:
 
   windows-react-empty-unmount:
     name: Windows paired React retention control
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["react-empty-unmount", "react-empty-safe", "react-fixture-setters"]'), inputs.retention-diagnostic)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["react-empty-unmount", "react-empty-safe", "react-fixture-setters"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 70
     permissions:
@@ -1533,6 +1533,7 @@ jobs:
       - name: Run the selected retention control
         env:
           RETENTION_CONTROL_KIND: ${{ inputs.retention-diagnostic }}
+          RETENTION_CONTROL_TRIALS: ${{ inputs.trials }}
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'listener-retention-control'
           $runtime = (Get-Command bun -CommandType Application).Source
@@ -1540,7 +1541,9 @@ jobs:
           if ($kind -in @('core-ownership', 'core-group')) {
             python benchmarks/retention/core-ownership-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'results') $kind
           } else {
-            python benchmarks/retention/react-dispatch-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'results') 3 $kind $runtime
+            $trials = if ($kind -eq 'timer-collection') { $env:RETENTION_CONTROL_TRIALS } else { '3' }
+            if ($trials -notmatch '^([3-9]|10)$') { throw 'Retention control requires 3 to 10 trials' }
+            python benchmarks/retention/react-dispatch-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'results') $trials $kind $runtime
           }
           if ($LASTEXITCODE -ne 0) { throw 'A retention control was invalid' }
       - name: Retain observations and failures
