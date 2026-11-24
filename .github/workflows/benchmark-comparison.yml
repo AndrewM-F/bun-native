@@ -47,6 +47,7 @@ on:
             'runtime-origin-trace-build',
             'runtime-clear-trace-build',
             'runtime-clear-trace-compare',
+            'runtime-unwind-preflight',
             'runtime-origin-trace-compare',
             'runtime-slot-trace-compare',
             'runtime-slot-stack-compare',
@@ -960,6 +961,28 @@ jobs:
           for root in /opt/winsysroot /opt/xwin; do
             if [[ -d "$root" ]]; then printf '%s: present\n' "$root"; else printf '%s: absent\n' "$root"; fi
           done
+
+  windows-unwind-preflight:
+    name: Windows collector unwind preflight
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-unwind-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compile and run bounded unwind probe
+        shell: cmd
+        run: |
+          @echo on
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set "BN_VS_PATH=%%i"
+          if not defined BN_VS_PATH exit /b 1
+          call "%BN_VS_PATH%\Common7\Tools\VsDevCmd.bat" -arch=x64
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /O2 /EHsc /I benchmarks\retention benchmarks\retention\collector-unwind-preflight.cpp /Fe:"%RUNNER_TEMP%\collector-unwind-preflight.exe"
+          if errorlevel 1 exit /b 1
+          "%RUNNER_TEMP%\collector-unwind-preflight.exe"
+          if errorlevel 1 exit /b 1
 
   windows-runtime-preflight:
     name: Windows runtime build preflight

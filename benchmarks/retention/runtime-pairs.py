@@ -68,6 +68,7 @@ def main():
     parser.add_argument("--collector-scan-slots", action="store_true")
     parser.add_argument("--collector-scan-origins", action="store_true")
     parser.add_argument("--collector-clear-bounds", action="store_true")
+    parser.add_argument("--collector-unwind", action="store_true")
     parser.add_argument("--collector-stack-limits", action="store_true")
     args = parser.parse_args()
     if args.collector_trace and not args.development_controls_only:
@@ -80,6 +81,8 @@ def main():
         raise ValueError("Origin tracing requires slot tracing")
     if args.collector_clear_bounds and not args.collector_scan_origins:
         raise ValueError("Clear-bound tracing requires origin tracing")
+    if args.collector_unwind and not args.collector_clear_bounds:
+        raise ValueError("Unwind tracing requires clear-bound tracing")
     if args.collector_stack_limits and not args.collector_scan_slots:
         raise ValueError("Stack-bound tracing requires slot tracing")
     if args.collector_stack_limits and os.environ.get("BUN_OPTIONS"):
@@ -115,6 +118,7 @@ def main():
         "collectorScanSlots": args.collector_scan_slots,
         "collectorScanOrigins": args.collector_scan_origins,
         "collectorClearBounds": args.collector_clear_bounds,
+        "collectorUnwind": args.collector_unwind,
         "collectorStackLimits": args.collector_stack_limits,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
@@ -147,6 +151,7 @@ def main():
             env.pop("BN_COLLECTOR_TRACE_SCAN_SLOTS", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_ORIGINS", None)
             env.pop("BN_COLLECTOR_TRACE_CLEAR_BOUNDS", None)
+            env.pop("BN_COLLECTOR_TRACE_UNWIND", None)
             env.pop("BN_COLLECTOR_TRACE_STACK_PRELOAD", None)
             if args.collector_trace and variant == "candidate":
                 env["BN_COLLECTOR_TRACE_REQUESTED"] = "1"
@@ -158,6 +163,8 @@ def main():
                     env["BN_COLLECTOR_TRACE_SCAN_ORIGINS"] = "1"
                 if args.collector_clear_bounds:
                     env["BN_COLLECTOR_TRACE_CLEAR_BOUNDS"] = "1"
+                if args.collector_unwind:
+                    env["BN_COLLECTOR_TRACE_UNWIND"] = "1"
                 if args.collector_stack_limits:
                     env["BN_COLLECTOR_TRACE_STACK_PRELOAD"] = str(
                         Path("benchmarks/retention/windows-stack-limits.ts").resolve(

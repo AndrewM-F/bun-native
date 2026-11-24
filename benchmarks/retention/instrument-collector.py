@@ -89,6 +89,18 @@ def transform_clear_bounds(data):
     )
 
 
+def transform_unwind(data):
+    data = replace_once(
+        data,
+        b'#include "root.h"\n',
+        b'#include "root.h"\n#include "BNCollectorUnwind.h"\n',
+    )
+    marker = b"        clearStackBelowCaller();\n"
+    if data.count(marker) != 2:
+        raise ValueError("Expected both pinned full-collection paths")
+    return data.replace(marker, marker + b"        BNCollectorTraceFrames();\n")
+
+
 def transform(roots, visitor, bindings, normal_edges=False, scan_slots=False):
     if scan_slots and not normal_edges:
         raise ValueError("Slot tracing requires normal edges")
@@ -173,7 +185,13 @@ def main():
     if len(sys.argv) not in (4, 5) or (
         len(sys.argv) == 5
         and sys.argv[4]
-        not in ("--normal-edges", "--scan-slots", "--scan-origin", "--clear-range")
+        not in (
+            "--normal-edges",
+            "--scan-slots",
+            "--scan-origin",
+            "--clear-range",
+            "--unwind",
+        )
     ):
         raise ValueError(
             "Expected bun, webkit, manifest and a known optional trace mode"
@@ -184,12 +202,15 @@ def main():
         "--scan-slots",
         "--scan-origin",
         "--clear-range",
+        "--unwind",
     )
     scan_origin = len(sys.argv) == 5 and sys.argv[4] in (
         "--scan-origin",
         "--clear-range",
+        "--unwind",
     )
-    clear_range = len(sys.argv) == 5 and sys.argv[4] == "--clear-range"
+    unwind = len(sys.argv) == 5 and sys.argv[4] == "--unwind"
+    clear_range = len(sys.argv) == 5 and sys.argv[4] in ("--clear-range", "--unwind")
     workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
     runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if bun != workspace / "bun-source" or webkit != workspace / "webkit-source":
@@ -212,6 +233,8 @@ def main():
     adjusted = transform(*original, normal_edges=normal_edges, scan_slots=scan_slots)
     if clear_range:
         adjusted = (adjusted[0], adjusted[1], transform_clear_bounds(adjusted[2]))
+    if unwind:
+        adjusted = (adjusted[0], adjusted[1], transform_unwind(adjusted[2]))
     declaration_path = paths[0].with_suffix(".h")
     declaration = None
     machine_path = paths[0].parent / "MachineStackMarker.cpp"
@@ -240,11 +263,19 @@ def main():
     if header.exists() or manifest.exists():
         raise ValueError("Trace header or manifest already exists")
     content = Path("benchmarks/retention/collector-trace-buffer.h").read_bytes()
+    unwind_path = paths[2].parent / "BNCollectorUnwind.h"
+    unwind_content = (
+        Path("benchmarks/retention/collector-unwind.h").read_bytes() if unwind else None
+    )
+    if unwind and unwind_path.exists():
+        raise ValueError("Unwind trace header already exists")
     plan = {
         "originalSha256": list(map(sha, original)),
         "instrumentedSha256": list(map(sha, adjusted)),
         "headerSha256": sha(content),
-        "eventKinds": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        "eventKinds": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        if unwind
+        else [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         if clear_range
         else [1, 2, 3, 4, 5, 6, 7, 8]
         if scan_origin
@@ -257,6 +288,9 @@ def main():
         if declaration is not None
         else None,
         "machineStackSha256": sha(machine) if machine is not None else None,
+        "unwindHeaderSha256": sha(unwind_content)
+        if unwind_content is not None
+        else None,
         "scope": "Opt-in diagnostic runtime; eventKinds lists recorded collector paths around explicit Bun.gc. Concurrent VMs and uninstrumented paths are not attributed; missing events never prove absence and overflow invalidates the trace.",
     }
     # The checkout is ephemeral; fail on any mismatch before changing any file.
@@ -267,6 +301,8 @@ def main():
     if machine is not None:
         machine_path.write_bytes(machine)
     header.write_bytes(content)
+    if unwind_content is not None:
+        unwind_path.write_bytes(unwind_content)
     manifest.write_text(json.dumps(plan, indent=2) + "\n")
 
 

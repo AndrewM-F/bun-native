@@ -22,7 +22,10 @@ def inspect_collector_traces(
     scan_slots=False,
     scan_origins=False,
     clear_bounds=False,
+    unwind=False,
 ):
+    if unwind and not clear_bounds:
+        raise ValueError("Unwind tracing requires clear-bound tracing")
     if clear_bounds and not scan_origins:
         raise ValueError("Clear-bound tracing requires origin tracing")
     if scan_origins and not scan_slots:
@@ -34,7 +37,11 @@ def inspect_collector_traces(
     )
     if clear_bounds:
         expected_kinds |= {9, 10}
+    if unwind:
+        expected_kinds |= {12}
     allowed_kinds = expected_kinds | ({6, 7, 8} if scan_origins else set())
+    if unwind:
+        allowed_kinds |= {11, 13}
     files = sorted(directory.glob("bn-gc-*.bin"))
     if not files:
         raise ValueError("Instrumented development process emitted no collector traces")
@@ -230,6 +237,9 @@ def main():
     scan_slots = os.environ.get("BN_COLLECTOR_TRACE_SCAN_SLOTS") == "1"
     scan_origins = os.environ.get("BN_COLLECTOR_TRACE_SCAN_ORIGINS") == "1"
     clear_bounds = os.environ.get("BN_COLLECTOR_TRACE_CLEAR_BOUNDS") == "1"
+    unwind = os.environ.get("BN_COLLECTOR_TRACE_UNWIND") == "1"
+    if unwind and not clear_bounds:
+        raise ValueError("Unwind tracing requires clear-bound tracing")
     stack_preload = os.environ.get("BN_COLLECTOR_TRACE_STACK_PRELOAD")
     if normal_edges and not trace_requested:
         raise ValueError("Normal-edge tracing requires collector tracing")
@@ -271,6 +281,7 @@ def main():
         "collectorTraceScanSlots": scan_slots,
         "collectorTraceScanOrigins": scan_origins,
         "collectorTraceClearBounds": clear_bounds,
+        "collectorTraceUnwind": unwind,
         "stackPreloadSha256": digest(Path(stack_preload)) if stack_preload else None,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
@@ -287,6 +298,7 @@ def main():
             env.pop("BN_COLLECTOR_TRACE_SCAN_SLOTS", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_ORIGINS", None)
             env.pop("BN_COLLECTOR_TRACE_CLEAR_BOUNDS", None)
+            env.pop("BN_COLLECTOR_TRACE_UNWIND", None)
             env.pop("BN_COLLECTOR_TRACE_STACK_PRELOAD", None)
             env.pop("BN_COLLECTOR_TRACE_DIR", None)
             trace_directory = output / f"{trial:02}-{mode}-collector-trace"
@@ -354,6 +366,7 @@ def main():
                         scan_slots=scan_slots,
                         scan_origins=scan_origins,
                         clear_bounds=clear_bounds,
+                        unwind=unwind,
                     )
                     if trace_requested and mode == "development"
                     else None

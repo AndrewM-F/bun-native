@@ -129,6 +129,16 @@ class CollectorTraceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             INSTRUMENT.transform_clear_bounds(transformed)
 
+    def test_unwind_trace_is_limited_to_both_collection_paths(self):
+        source = b'#include "root.h"\n        clearStackBelowCaller();\n        clearStackBelowCaller();\n'
+        result = INSTRUMENT.transform_unwind(source)
+        self.assertIn(b'#include "BNCollectorUnwind.h"', result)
+        self.assertEqual(result.count(b"BNCollectorTraceFrames();"), 2)
+        with self.assertRaises(ValueError):
+            INSTRUMENT.transform_unwind(
+                source.replace(b"clearStackBelowCaller();", b"missing();", 1)
+            )
+
     @unittest.skipIf(
         os.name == "nt" or not shutil.which("clang++"),
         "requires clang++ and POSIX environment",

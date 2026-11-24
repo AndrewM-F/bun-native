@@ -14,8 +14,15 @@ from pathlib import Path
 
 
 def trace_paths(
-    path, targets, scan_slots=False, scan_origins=False, clear_bounds=False
+    path,
+    targets,
+    scan_slots=False,
+    scan_origins=False,
+    clear_bounds=False,
+    unwind=False,
 ):
+    if unwind and not clear_bounds:
+        raise ValueError("Unwind tracing requires clear-bound tracing")
     if clear_bounds and not scan_origins:
         raise ValueError("Clear-bound tracing requires origin tracing")
     if scan_origins and not scan_slots:
@@ -41,6 +48,9 @@ def trace_paths(
     origins = collections.defaultdict(set)
     clear_ranges = set()
     frame_anchors = set()
+    frames = set()
+    frame_pcs = collections.defaultdict(set)
+    frame_images = collections.defaultdict(set)
     kinds = set()
     for source, target, kind, reserved in struct.iter_unpack(
         "<QQII", memoryview(data)[40:]
@@ -49,7 +59,9 @@ def trace_paths(
             not target
             or kind
             not in (
-                {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+                {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+                if unwind
+                else {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
                 if clear_bounds
                 else {1, 2, 3, 4, 5, 6, 7, 8}
                 if scan_origins
@@ -87,9 +99,19 @@ def trace_paths(
             if not source or source >= target:
                 raise ValueError("Invalid clear range or frame anchor")
             (clear_ranges if kind == 9 else frame_anchors).add((source, target))
+        elif kind == 11:
+            if not source or source >= target:
+                raise ValueError("Invalid unwind frame range")
+            frames.add((source, target))
+        elif kind in (12, 13):
+            if not source:
+                raise ValueError("Invalid unwind frame metadata")
+            (frame_pcs if kind == 12 else frame_images)[source].add(target)
     expected = {1, 2, 3, 4, 5} if scan_slots else {1, 2, 3}
     if clear_bounds:
         expected |= {9, 10}
+    if unwind:
+        expected |= {12}
     if not expected.issubset(kinds) or (
         scan_origins and not kinds.intersection({6, 7, 8})
     ):
@@ -139,6 +161,19 @@ def trace_paths(
                             for start, end in sorted(clear_ranges)
                             if start <= slot < end
                         ]
+                        if unwind:
+                            slot_record["candidateFrames"] = [
+                                {
+                                    "start": hex(start),
+                                    "end": hex(end),
+                                    "pcs": [hex(x) for x in sorted(frame_pcs[start])],
+                                    "imageBases": [
+                                        hex(x) for x in sorted(frame_images[start])
+                                    ],
+                                }
+                                for start, end in sorted(frames)
+                                if start <= slot < end
+                            ]
             path_records = [root]
             while found != target:
                 found, kind = child[found]
@@ -156,6 +191,18 @@ def trace_paths(
         "paths": paths,
         "clearRanges": [[hex(a), hex(b)] for a, b in sorted(clear_ranges)],
         "frameAnchors": [[hex(a), hex(b)] for a, b in sorted(frame_anchors)],
+        "unwindFrames": [
+            {
+                "start": hex(a),
+                "end": hex(b),
+                "pcs": [hex(x) for x in sorted(frame_pcs[a])],
+                "imageBases": [hex(x) for x in sorted(frame_images[a])],
+            }
+            for a, b in sorted(frames)
+        ],
+        "unwindPcs": {
+            hex(a): [hex(x) for x in sorted(v)] for a, v in sorted(frame_pcs.items())
+        },
     }
 
 
@@ -166,6 +213,7 @@ def main():
     parser.add_argument("--scan-slots", action="store_true")
     parser.add_argument("--scan-origins", action="store_true")
     parser.add_argument("--clear-bounds", action="store_true")
+    parser.add_argument("--unwind", action="store_true")
     args = parser.parse_args()
     print(
         json.dumps(
@@ -175,6 +223,7 @@ def main():
                 scan_slots=args.scan_slots,
                 scan_origins=args.scan_origins,
                 clear_bounds=args.clear_bounds,
+                unwind=args.unwind,
             ),
             indent=2,
         )

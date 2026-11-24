@@ -121,6 +121,49 @@ class CollectorPathTests(unittest.TestCase):
             self.assertEqual(result["frameAnchors"], [["0x96", "0x9e"]])
             self.assertIsNone(result["paths"][1]["path"])
 
+    def test_unwind_ranges_are_metadata_and_missing_frames_are_not_inferred(self):
+        with tempfile.TemporaryDirectory() as temp:
+            trace = Path(temp) / "trace.bin"
+            write_trace(
+                trace,
+                [
+                    (100, 1, 1, 0),
+                    (1, 2, 3, 0),
+                    (2, 3, 2, 0),
+                    (120, 1, 4, 0),
+                    (100, 200, 5, 0),
+                    (100, 200, 6, 0),
+                    (101, 110, 9, 0),
+                    (110, 118, 10, 0),
+                    (115, 130, 11, 0),
+                    (115, 1000, 12, 0),
+                    (115, 900, 13, 0),
+                    (130, 2000, 12, 0),
+                ],
+            )
+            result = ANALYZE.trace_paths(
+                trace,
+                [3, 130],
+                scan_slots=True,
+                scan_origins=True,
+                clear_bounds=True,
+                unwind=True,
+            )
+            slot = result["paths"][0]["path"][0]["candidateSlots"][0]
+            self.assertEqual(
+                slot["candidateFrames"],
+                [
+                    {
+                        "start": "0x73",
+                        "end": "0x82",
+                        "pcs": ["0x3e8"],
+                        "imageBases": ["0x384"],
+                    }
+                ],
+            )
+            self.assertEqual(result["unwindPcs"]["0x82"], ["0x7d0"])
+            self.assertIsNone(result["paths"][1]["path"])
+
 
 if __name__ == "__main__":
     unittest.main()
