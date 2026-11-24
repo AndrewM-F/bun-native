@@ -1834,7 +1834,7 @@ jobs:
         if: contains(fromJSON('["runtime-libuv-native-trim-build", "runtime-libuv-poll-clear-trim-build"]'), inputs.retention-diagnostic)
         run: |
           $nativeTrimArgs = @((Join-Path $env:GITHUB_WORKSPACE 'bun-source'), (Join-Path $env:RUNNER_TEMP 'native-trim-adjustments.json'))
-          if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-poll-clear-trim-build') { $nativeTrimArgs += '--native-lib' }
+          if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-poll-clear-trim-build') { $nativeTrimArgs += @('--native-lib', '--neutral-data') }
           python benchmarks/retention/instrument-native-trim.py @nativeTrimArgs
           if ($LASTEXITCODE -ne 0) { throw 'Native trim diagnostic adjustment failed' }
       - name: Instrument the pinned collector for a separate diagnostic runtime
