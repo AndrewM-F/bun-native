@@ -15,6 +15,7 @@
 //   enter X Y           mouse-down on the source, begin the session, move to
 //                       the window-relative point X,Y of the found window and
 //                       wait until the session itself has tracked it there
+//   inspect X Y         report pointer/session state and bounded window stack
 //   move X Y            drag to X,Y, with the same wait
 //   drop                release the button; reports the session's operation
 //   leave               cancel with Escape, then release over the source
@@ -249,6 +250,63 @@ static NSInteger session_moves(CGPoint *point) {
     }
 }
 
+// Preserve WindowServer order and omit window titles and owner names. This is
+// diagnostic evidence, not a claim that a listed window intercepts the drag.
+static NSDictionary *windows_at_point(NSArray *windows, CGPoint point) {
+    NSMutableArray *matches = [NSMutableArray array];
+    NSUInteger count = 0;
+    NSUInteger unknownBounds = 0;
+    NSUInteger incomplete = 0;
+    for (NSDictionary *window in windows) {
+        if (![window isKindOfClass:NSDictionary.class]) { unknownBounds++; continue; }
+        CGRect bounds = CGRectZero;
+        id dictionary = window[(__bridge NSString *)kCGWindowBounds];
+        if (![dictionary isKindOfClass:NSDictionary.class] ||
+            !CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)dictionary, &bounds) ||
+            !isfinite(bounds.origin.x) || !isfinite(bounds.origin.y) ||
+            !isfinite(bounds.size.width) || !isfinite(bounds.size.height)) {
+            unknownBounds++;
+            continue;
+        }
+        if (!CGRectContainsPoint(bounds, point)) continue;
+        id windowID = window[(__bridge NSString *)kCGWindowNumber];
+        id ownerPID = window[(__bridge NSString *)kCGWindowOwnerPID];
+        id layer = window[(__bridge NSString *)kCGWindowLayer];
+        id alpha = window[(__bridge NSString *)kCGWindowAlpha];
+        if (!number(windowID) || !number(ownerPID) || !number(layer) || !number(alpha)) incomplete++;
+        count++;
+        if (matches.count < 20) {
+            [matches addObject:@{ @"id": number(windowID) ? windowID : NSNull.null,
+                @"pid": number(ownerPID) ? ownerPID : NSNull.null,
+                @"layer": number(layer) ? layer : NSNull.null,
+                @"alpha": number(alpha) ? alpha : NSNull.null, @"bounds": @[@(bounds.origin.x), @(bounds.origin.y),
+                    @(bounds.size.width), @(bounds.size.height)] }];
+        }
+    }
+    return @{ @"windows": matches, @"matchingCount": @(count), @"truncated": @(count > matches.count),
+        @"unknownBounds": @(unknownBounds), @"incompleteMetadata": @(incomplete) };
+}
+
+static NSDictionary *inspect(CGPoint point) {
+    NSArray *windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+    if (!windows) fail(@"The current session has no accessible WindowServer");
+    CGEventRef event = CGEventCreate(NULL);
+    if (!event) fail(@"Cannot read the current pointer position");
+    CGPoint mouse = CGEventGetLocation(event);
+    CFRelease(event);
+    CGPoint tracked;
+    NSInteger moves = session_moves(&tracked);
+    NSMutableDictionary *evidence = [windows_at_point(windows, point) mutableCopy];
+    evidence[@"target"] = @[@(point.x), @(point.y)];
+    evidence[@"mouse"] = @[@(mouse.x), @(mouse.y)];
+    evidence[@"buttonDown"] = @(CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,
+        kCGMouseButtonLeft));
+    evidence[@"sessionMoves"] = @(moves);
+    evidence[@"tracked"] = moves > 0 ? @[@(tracked.x), @(tracked.y)] : NSNull.null;
+    return evidence;
+}
+
 /// Waits until the session has tracked a move past `after` that ends within
 /// two points of `point`, reposting that same position every 100 ms. A
 /// session whose tracking starts after the posted motion (a 65-item session
@@ -300,6 +358,7 @@ static NSDictionary *command(NSString *line) {
     NSString *verb = space.location == NSNotFound ? line : [line substringToIndex:space.location];
     NSString *rest = space.location == NSNotFound ? @"" : [line substringFromIndex:space.location + 1];
     if ([verb isEqualToString:@"find"]) return find(parse_json(rest));
+    if ([verb isEqualToString:@"inspect"]) return inspect(target_point(rest));
     if ([verb isEqualToString:@"offer"]) {
         NSRange kind = [rest rangeOfString:@" "];
         if (kind.location == NSNotFound) fail(@"offer TYPE JSON");

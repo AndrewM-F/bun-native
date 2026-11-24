@@ -388,6 +388,13 @@ async function qualification() {
         const currentWindow = await xdnd
           .send('find ' + JSON.stringify({ title, width: 560, height: 380, pid: process.pid }))
           .catch((lookupError: unknown) => ({ lookupError: String(lookupError) }))
+        const pointerAndWindows = await xdnd
+          .send('inspect 130 150')
+          .catch((inspectError: unknown) => ({ inspectError: String(inspectError) }))
+        console.error(
+          'AppKit large-list pointer and window stack:',
+          JSON.stringify(pointerAndWindows)
+        )
         const failedAt = performance.now()
         // Measured: a healthy runner delivers this entry in 0.9-1.5 s for 65
         // files and 0.4-0.6 s for one. Keep watching after the failure (the

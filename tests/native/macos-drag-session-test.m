@@ -66,6 +66,32 @@ int main(void) {
             fprintf(stderr, "Second session movement was not recorded\n");
             return 5;
         }
+        NSDictionary *bounds = CFBridgingRelease(CGRectCreateDictionaryRepresentation(
+            CGRectMake(100, 100, 80, 80)));
+        NSMutableArray *windows = [NSMutableArray array];
+        for (int index = 0; index < 22; index++) {
+            [windows addObject:@{ (__bridge NSString *)kCGWindowBounds: bounds,
+                (__bridge NSString *)kCGWindowNumber: @(index),
+                (__bridge NSString *)kCGWindowOwnerPID: @100,
+                (__bridge NSString *)kCGWindowLayer: @0,
+                (__bridge NSString *)kCGWindowAlpha: @1,
+                (__bridge NSString *)kCGWindowName: @"private title" }];
+        }
+        [windows addObject:@{ (__bridge NSString *)kCGWindowBounds: bounds }];
+        [windows addObject:@{}];
+        NSDictionary *stack = windows_at_point(windows, CGPointMake(110, 110));
+        NSArray *reported = stack[@"windows"];
+        if ([stack[@"matchingCount"] intValue] != 23 || ![stack[@"truncated"] boolValue] ||
+            [stack[@"unknownBounds"] intValue] != 1 || [stack[@"incompleteMetadata"] intValue] != 1 ||
+            reported.count != 20 || [reported[0][@"id"] intValue] != 0 ||
+            [reported[19][@"id"] intValue] != 19 || [reported[0] count] != 5) {
+            fprintf(stderr, "Window stack evidence was not bounded or ordered\n");
+            return 6;
+        }
+        if ([windows_at_point(windows, CGPointMake(300, 300))[@"matchingCount"] intValue] != 0) {
+            fprintf(stderr, "Window stack included windows outside the point\n");
+            return 7;
+        }
         return 0;
     }
 }
