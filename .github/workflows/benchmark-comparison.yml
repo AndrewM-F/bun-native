@@ -51,6 +51,7 @@ on:
             'runtime-libuv-noinline-build',
             'runtime-libuv-native-trim-build',
             'runtime-libuv-native-trim-compare',
+            'runtime-coff-lib-preflight',
             'runtime-libuv-poll-clear-build',
             'runtime-libuv-poll-clear-compare',
             'runtime-libuv-poll-clear-calibration',
@@ -1078,6 +1079,66 @@ jobs:
           path: |
             ${{ runner.temp }}/native-trim-comparison/
             !${{ runner.temp }}/native-trim-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-coff-lib-preflight:
+    name: Reproduce native COFF library lookup
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-coff-lib-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          repository: oven-sh/bun
+          ref: b1007f1177fd402fae67387b8548cae5ae9b5707
+          path: bun-source
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Link a small real CRT-dependent Windows executable
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'coff-lib-preflight'
+          New-Item -ItemType Directory $root | Out-Null
+          "EVIDENCE=$root" >> $env:GITHUB_ENV
+          . (Join-Path $env:GITHUB_WORKSPACE 'bun-source/scripts/vs-shell.ps1')
+          $env:PATH = 'C:\Program Files\LLVM\bin;' + $env:PATH
+          Set-Location $root
+          @'
+          #include <stdio.h>
+          int main(void) { return puts("control") < 0; }
+          '@ | Set-Content -Encoding ascii control.c
+          clang-cl /nologo /MT /c control.c /Focontrol.obj
+          if ($LASTEXITCODE -ne 0) { throw 'CRT control compilation failed' }
+          clang-cl /nologo -fuse-ld=lld control.obj /Fecontrol.exe /link /machine:x64 /lldmap:control.lldmap /map:control.map
+          if ($LASTEXITCODE -ne 0) { throw 'CRT control link failed' }
+          & ./control.exe *> control-output.log
+          if ($LASTEXITCODE -ne 0) { throw 'CRT control execution failed' }
+          Set-Location $env:GITHUB_WORKSPACE
+          bun benchmarks/retention/coff-lib-preflight.ts (Join-Path $env:GITHUB_WORKSPACE 'bun-source') $root (Join-Path $root 'results.json')
+          if ($LASTEXITCODE -ne 0) { throw 'CRT library lookup control did not reproduce' }
+      - name: Retain maps and comparison
+        if: ${{ always() && env.EVIDENCE != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-coff-lib-preflight
+          path: |
+            ${{ runner.temp }}/coff-lib-preflight/
+            !${{ runner.temp }}/coff-lib-preflight/*.exe
           if-no-files-found: warn
           retention-days: 30
 
