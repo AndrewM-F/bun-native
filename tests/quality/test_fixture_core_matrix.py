@@ -10,9 +10,27 @@ SPEC = importlib.util.spec_from_file_location(
 )
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+NATIVE_SPEC = importlib.util.spec_from_file_location(
+    "prepare_native_fixture", ROOT / "benchmarks/retention/prepare-native-fixture.py"
+)
+NATIVE = importlib.util.module_from_spec(NATIVE_SPEC)
+NATIVE_SPEC.loader.exec_module(NATIVE)
 
 
 class FixtureCoreMatrixTests(unittest.TestCase):
+    def test_native_fixture_requires_exact_proven_sources(self):
+        original = (ROOT / "benchmarks/solid/react.tsx").read_bytes()
+        batch = (ROOT / "packages/core/src/batches.ts").read_bytes()
+        variant = NATIVE.build_variant(original, batch)
+        self.assertEqual(
+            NATIVE.digest(variant),
+            "a79755f09a39f6f9363ccf6937b8a2262685b5ee405e07fd4496ad4d21867195",
+        )
+        with self.assertRaisesRegex(ValueError, "original React fixture"):
+            NATIVE.build_variant(original + b" ", batch)
+        with self.assertRaisesRegex(ValueError, "batch-release candidate"):
+            NATIVE.build_variant(original, batch + b" ")
+
     def test_runs_both_variants_and_restores_candidate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
