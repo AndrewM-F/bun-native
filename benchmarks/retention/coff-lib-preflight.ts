@@ -5,7 +5,9 @@ import { pathToFileURL } from 'node:url'
 
 const [source, work, output] = process.argv.slice(2)
 if (process.platform !== 'win32' || !source || !work || !output) throw new Error('Windows source and evidence paths required')
-const { readCoffGraph } = await import(pathToFileURL(join(resolve(source), 'scripts/build/trim/coff-graph.ts')).href)
+const sourceRoot = resolve(source)
+process.chdir(work)
+const { readCoffGraph } = await import(pathToFileURL(join(sourceRoot, 'scripts/build/trim/coff-graph.ts')).href)
 const base = { executable: join(work, 'control.exe'), chunkMap: join(work, 'control.lldmap'), symbolMap: join(work, 'control.map'), inputs: [join(work, 'control.obj')], alternateNames: [] }
 const libraries = (process.env['LIB'] ?? '').split(delimiter).filter(Boolean)
 if (libraries.length === 0) throw new Error('MSVC LIB search path unavailable')
@@ -17,4 +19,4 @@ for (const [name, folders] of [['without', []], ['with', libraries]] as const) {
 }
 writeFileSync(output, JSON.stringify(results, null, 2) + '\n', { flag: 'wx' })
 const missing = (entry: (typeof results)[number]) => entry.failures.filter((item: { kind: string; reason?: string }) => item.kind === 'UnreadInput' && item.reason === 'NotFound').length
-if (missing(results[0]!) === 0 || missing(results[1]!) >= missing(results[0]!)) throw new Error('LIB-path hypothesis was not reproduced')
+if (missing(results[0]!) === 0 || missing(results[1]!) !== 0) throw new Error('LIB-path hypothesis was not reproduced')
