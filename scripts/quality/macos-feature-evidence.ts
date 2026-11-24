@@ -407,6 +407,7 @@ export const EXTRA_SOURCES = [
   'tests/native/macos-display-oracle.m',
   'tests/native/macos-virtual-display.m',
   'tests/native/macos-drag-source.m',
+  'tests/native/macos-drag-session-test.m',
   'tests/native/layout-style-compare.ts',
   'tests/native/task-dialogs.ts',
   'tests/native/context-menus.ts',

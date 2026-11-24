@@ -100,6 +100,12 @@ static CGPoint source_center(void) {
         [item setDraggingFrame:NSMakeRect(at.x - 8, at.y - 8, 16, 16) contents:image];
         [items addObject:item];
     }
+    // Movement evidence belongs to this session, not a previous drag that
+    // happened to finish at the same destination.
+    @synchronized(sessionLock) {
+        sessionMoves = 0;
+        sessionPoint = CGPointMake(NAN, NAN);
+    }
     NSDraggingSession *session = [self beginDraggingSessionWithItems:items event:event source:self];
     session.animatesToStartingPositionsOnCancelOrFail = NO;
     session.draggingFormation = NSDraggingFormationNone;
