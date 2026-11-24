@@ -18,6 +18,37 @@ spec.loader.exec_module(INSTRUMENT)
 
 
 class CollectorTraceTests(unittest.TestCase):
+    def test_all_expected_collector_hooks_are_installed(self):
+        roots = (
+            b'#include "ConservativeRoots.h"\n'
+            b"        if (isJSCellKind(cellKind))\n"
+            b"            markHook.markKnownJSCell(static_cast<JSCell*>(p));\n"
+        )
+        visitor = (
+            b"WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN\n"
+            b"ALWAYS_INLINE void SlotVisitor::appendHiddenUnbarriered(JSCell* cell)\n{\n"
+        )
+        bindings = (
+            b"size_t JSC__VM__runGC(JSC::VM* vm, bool sync)\n{\n"
+            b"    JSC::JSLockHolder lock(vm);\n"
+            b"    return vm->heap.sizeAfterLastFullCollection();\n}\n"
+        )
+        updated_roots, updated_visitor, updated_bindings = INSTRUMENT.transform(
+            roots, visitor, bindings
+        )
+        self.assertIn(b"BNCollectorTraceRecord(1, pointer, p)", updated_roots)
+        self.assertIn(
+            b"BNCollectorTraceRecord(2, m_currentCell, cell)", updated_visitor
+        )
+        self.assertLess(
+            updated_bindings.index(
+                b"BNCollectorTraceBegin();\n", updated_bindings.index(b"lock(vm)")
+            ),
+            updated_bindings.index(b"BNCollectorTraceEnd(bnTraceEpoch)"),
+        )
+        with self.assertRaises(ValueError):
+            INSTRUMENT.transform(updated_roots, visitor, bindings)
+
     def test_missing_source_marker_fails_closed(self):
         with self.assertRaises(ValueError):
             INSTRUMENT.transform(b"wrong", b"wrong", b"wrong")
