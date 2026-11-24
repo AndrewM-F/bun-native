@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.37.6](https://github.com/AndrewM-F/bun-native/compare/v0.37.5...v0.37.6) (2026-11-24)
+
+
+### Bug Fixes
+
+* **deps:** bump heapless to 0.9.4 ([#774](https://github.com/AndrewM-F/bun-native/issues/774)) ([a85fa5c](https://github.com/AndrewM-F/bun-native/commit/a85fa5c9b59993aa9ecd472e7e9152c5c7f8d10c))
+* **deps:** move off yanked async-executor 1.14.0 ([#775](https://github.com/AndrewM-F/bun-native/issues/775)) ([8b12564](https://github.com/AndrewM-F/bun-native/commit/8b125642bdb2a311851970d25990947033cb33af))
+* **test:** isolate macOS drag session movement evidence ([#779](https://github.com/AndrewM-F/bun-native/issues/779)) ([dfe9026](https://github.com/AndrewM-F/bun-native/commit/dfe902609e343a7899143b27798b14c798465fbc))
+
 ## [0.37.5](https://github.com/AndrewM-F/bun-native/compare/v0.37.4...v0.37.5) (2026-11-23)
 
 
