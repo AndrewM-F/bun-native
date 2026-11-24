@@ -936,11 +936,19 @@ jobs:
           } | Format-List | Out-File (Join-Path $env:COMPARISON 'hardware.txt')
       - name: Run the equivalent-workload comparison
         timeout-minutes: 45
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
         run: |
           bun benchmarks/comparison/run.ts `
             --host (Join-Path $env:GITHUB_WORKSPACE 'target/release/bun-native-host.exe') --host-profile release `
             --output (Join-Path $env:COMPARISON 'run') --trials $env:TRIALS --input-trials 0
           if ($LASTEXITCODE -ne 0) { throw "The comparison exited $LASTEXITCODE" }
+          if ($env:RETENTION_DIAGNOSTIC -eq 'native-fixture') {
+            $reportPath = Join-Path $env:COMPARISON 'run/comparison.json'
+            if (!(Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'The diagnostic report is missing' }
+            $report = Get-Content -Raw -LiteralPath $reportPath | ConvertFrom-Json
+            if ($report.status -ne 'passed' -or @($report.failedLaunches).Count -ne 0) { throw 'The diagnostic recorded failed launches' }
+          }
       - name: Run the direct Rust GPUI baseline
         if: ${{ !cancelled() && hashFiles('target/release/examples/workload-baseline.exe') != '' }}
         timeout-minutes: 10
