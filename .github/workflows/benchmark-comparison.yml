@@ -51,6 +51,7 @@ on:
             'runtime-libuv-noinline-build',
             'runtime-libuv-native-trim-build',
             'runtime-libuv-poll-clear-trim-build',
+            'runtime-libuv-poll-clear-trim-compare',
             'runtime-libuv-native-trim-compare',
             'runtime-coff-lib-preflight',
             'runtime-libuv-poll-clear-build',
@@ -1077,6 +1078,67 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-native-trim-comparison
+          path: |
+            ${{ runner.temp }}/native-trim-comparison/
+            !${{ runner.temp }}/native-trim-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-clear-trim-compare:
+    name: Compare buffer-clearing trimmed AOT runtime on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-poll-clear-trim-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify the diagnostic trim build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45407828512') { throw 'Unexpected native trim build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '74a096e6553359178e80e27c850408bf8bb04c87' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected native trim build identity' }
+          $root = Join-Path $env:RUNNER_TEMP 'native-trim-comparison'
+          New-Item -ItemType Directory $root | Out-Null
+          $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'build-run.json')
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-libuv-poll-clear-trim-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Native trim artifact download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $trim = @(Get-ChildItem (Join-Path $root 'runtime') -Filter native-trim-adjustments.json -File -Recurse)
+          $poll = @(Get-ChildItem (Join-Path $root 'runtime') -Filter libuv-poll-adjustments.json -File -Recurse)
+          $build = @(Get-ChildItem (Join-Path $root 'runtime') -Filter runtime-build-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $trim.Count -ne 1 -or $poll.Count -ne 1 -or $build.Count -ne 1) { throw 'Expected one binary and three adjustment manifests' }
+          $t = Get-Content -Raw $trim[0].FullName | ConvertFrom-Json
+          $p = Get-Content -Raw $poll[0].FullName | ConvertFrom-Json
+          $b = Get-Content -Raw $build[0].FullName | ConvertFrom-Json
+          $timer = $b.'webkit/Source/WTF/wtf/bun/RunLoopBun.cpp'
+          if ($p.mode -ne 'clear' -or $t.coffOriginalSha256 -ne '0c3456653c73da79e97ee9b3481ee0e280420ed0ed87960af3768d6af1e50052' -or $t.coffAdjustedSha256 -ne '7e0c4a3ffe0301d84104e841c3d1718ffaaa561524a71d279cce2194dea20ebd' -or $t.originalSha256 -ne '250214955aa10df16dbd06a9858948e8b1fb42e201e70f90af7408a605114826' -or $t.adjustedSha256 -ne '8a6357783e12211117f3bb784a197ce8e1e593ecc3b3a463888a5b6504f083b8' -or $p.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $p.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $p.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $p.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95' -or $timer.adjustedSha256 -ne 'e081b917bdeaf5ad3facba1b973997ce1e70051d014abd69def12f4ae896610f') { throw 'Native trim source identity mismatch' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare inspected development and AOT controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'native-trim-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $baseline = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $baseline $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime, AOT inspection, or retention control was invalid' }
+      - name: Retain inspections and all controls
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-poll-clear-trim-comparison
           path: |
             ${{ runner.temp }}/native-trim-comparison/
             !${{ runner.temp }}/native-trim-comparison/**/*.exe
