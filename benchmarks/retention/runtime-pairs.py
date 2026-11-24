@@ -63,6 +63,7 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--development-controls-only", action="store_true")
+    parser.add_argument("--aot-reference", type=Path)
     parser.add_argument("--collector-trace", action="store_true")
     parser.add_argument("--collector-normal-edges", action="store_true")
     parser.add_argument("--collector-scan-slots", action="store_true")
@@ -97,6 +98,13 @@ def main():
         "baseline": identity(args.baseline, revision),
         "candidate": identity(args.candidate, revision),
     }
+    if args.aot_reference and not args.development_controls_only:
+        raise ValueError("AOT reference requires development-only controls")
+    aot_reference = (
+        identity(args.aot_reference, revision)
+        if args.aot_reference
+        else runtimes["baseline"]
+    )
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     plan = {
@@ -106,11 +114,11 @@ def main():
         "pairs": args.pairs,
         "order": "baseline/candidate on even pairs; candidate/baseline on odd pairs",
         "scope": (
-            "Development runtime comparison only; AOT controls use the distributed compiler, not the candidate. No native input, paint or performance qualification."
+            "Development runtime comparison only; AOT controls use the recorded reference compiler, not the candidate. No native input, paint or performance qualification."
             if args.development_controls_only
             else "Headless React retention controls; no native input, paint or performance qualification."
         ),
-        "aotReferenceRuntime": runtimes["baseline"]
+        "aotReferenceRuntime": aot_reference
         if args.development_controls_only
         else None,
         "collectorTrace": args.collector_trace,
@@ -141,9 +149,7 @@ def main():
             env = control_environment(
                 os.environ,
                 revision,
-                runtimes["baseline"]["path"]
-                if args.development_controls_only
-                else None,
+                aot_reference["path"] if args.development_controls_only else None,
             )
             env.pop("BN_COLLECTOR_TRACE_DIR", None)
             env.pop("BN_COLLECTOR_TRACE_REQUESTED", None)

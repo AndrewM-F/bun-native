@@ -741,7 +741,8 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
           bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
-          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only
+          $reference = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --aot-reference $reference
           if ($LASTEXITCODE -ne 0) { throw 'A runtime control was invalid' }
       - name: Retain controls and source identities
         if: ${{ always() }}
