@@ -2,7 +2,8 @@
 
 The runtime is diagnostic only. Captured events are not necessarily complete:
 concurrent VMs, deferred marking and uninstrumented paths can add roots or edges.
-Overflow invalidates absence claims. This does not modify the shipped runtime.
+Missing events never establish absence; overflow invalidates the trace. This does
+not modify the shipped runtime.
 """
 
 import hashlib
@@ -93,7 +94,7 @@ def main():
         "originalSha256": list(map(sha, original)),
         "instrumentedSha256": list(map(sha, adjusted)),
         "headerSha256": sha(content),
-        "scope": "Opt-in diagnostic runtime; traces conservative matches and hidden visitor calls around explicit Bun.gc. Concurrent VMs and uninstrumented paths are not attributed; overflow invalidates absence claims.",
+        "scope": "Opt-in diagnostic runtime; traces conservative matches and hidden visitor calls around explicit Bun.gc. Concurrent VMs and uninstrumented paths are not attributed; missing events never prove absence and overflow invalidates the trace.",
     }
     # The checkout is ephemeral; fail on any mismatch before changing any file.
     for path, data in zip(paths, adjusted, strict=True):
