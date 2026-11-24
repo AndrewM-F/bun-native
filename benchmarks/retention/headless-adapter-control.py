@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 
-def inspect_collector_traces(directory):
+def inspect_collector_traces(directory, normal_edges=False):
     files = sorted(directory.glob("bn-gc-*.bin"))
     if not files:
         raise ValueError("Instrumented development process emitted no collector traces")
@@ -46,7 +46,11 @@ def inspect_collector_traces(directory):
                 if len(block) % 24:
                     raise ValueError("Incomplete collector trace record")
                 for _, target, kind, reserved in struct.iter_unpack("<QQII", block):
-                    if not target or kind not in (1, 2) or reserved:
+                    if (
+                        not target
+                        or kind not in ({1, 2, 3} if normal_edges else {1, 2})
+                        or reserved
+                    ):
                         raise ValueError("Malformed collector trace record")
                     event_kinds.add(kind)
         results.append(
@@ -57,8 +61,8 @@ def inspect_collector_traces(directory):
                 "sha256": digest(path),
             }
         )
-    if event_kinds != {1, 2}:
-        raise ValueError("Collector trace did not exercise both recorded paths")
+    if event_kinds != ({1, 2, 3} if normal_edges else {1, 2}):
+        raise ValueError("Collector trace did not exercise all requested paths")
     return results
 
 
@@ -178,6 +182,9 @@ def main():
     narrow_scan = narrow_scan_setting(os.environ)
     require_narrow_dump = os.environ.get("BUN_NATIVE_DIAG_NARROW_DUMP") == "1"
     trace_requested = os.environ.get("BN_COLLECTOR_TRACE_REQUESTED") == "1"
+    normal_edges = os.environ.get("BN_COLLECTOR_TRACE_NORMAL_EDGES") == "1"
+    if normal_edges and not trace_requested:
+        raise ValueError("Normal-edge tracing requires collector tracing")
     output.mkdir(parents=True, exist_ok=False)
     plan = {
         "revision": revision,
@@ -198,6 +205,7 @@ def main():
         "narrowReferenceScanEnv": narrow_scan,
         "requireNarrowOptionDump": require_narrow_dump,
         "collectorTraceRequested": trace_requested,
+        "collectorTraceNormalEdges": normal_edges,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     results = []
@@ -209,6 +217,7 @@ def main():
             env = os.environ.copy()
             env.pop("BUN_NATIVE_DIAG_NARROW_DUMP", None)
             env.pop("BN_COLLECTOR_TRACE_REQUESTED", None)
+            env.pop("BN_COLLECTOR_TRACE_NORMAL_EDGES", None)
             env.pop("BN_COLLECTOR_TRACE_DIR", None)
             trace_directory = output / f"{trial:02}-{mode}-collector-trace"
             if trace_requested and mode == "development":
@@ -267,7 +276,7 @@ def main():
                     effective_narrow_scan(child.stderr) if require_narrow_dump else None
                 )
                 traces = (
-                    inspect_collector_traces(trace_directory)
+                    inspect_collector_traces(trace_directory, normal_edges=normal_edges)
                     if trace_requested and mode == "development"
                     else None
                 )

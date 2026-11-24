@@ -64,9 +64,12 @@ def main():
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--development-controls-only", action="store_true")
     parser.add_argument("--collector-trace", action="store_true")
+    parser.add_argument("--collector-normal-edges", action="store_true")
     args = parser.parse_args()
     if args.collector_trace and not args.development_controls_only:
         raise ValueError("Collector tracing is limited to the development runtime")
+    if args.collector_normal_edges and not args.collector_trace:
+        raise ValueError("Normal-edge tracing requires collector tracing")
     if not 1 <= args.pairs <= 5:
         raise ValueError("pairs must be in 1..5")
     if any(name.startswith("BUN_JSC_") for name in os.environ):
@@ -94,6 +97,7 @@ def main():
         if args.development_controls_only
         else None,
         "collectorTrace": args.collector_trace,
+        "collectorNormalEdges": args.collector_normal_edges,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     records = []
@@ -121,8 +125,11 @@ def main():
             )
             env.pop("BN_COLLECTOR_TRACE_DIR", None)
             env.pop("BN_COLLECTOR_TRACE_REQUESTED", None)
+            env.pop("BN_COLLECTOR_TRACE_NORMAL_EDGES", None)
             if args.collector_trace and variant == "candidate":
                 env["BN_COLLECTOR_TRACE_REQUESTED"] = "1"
+                if args.collector_normal_edges:
+                    env["BN_COLLECTOR_TRACE_NORMAL_EDGES"] = "1"
             record = {
                 "trial": trial,
                 "variant": variant,
