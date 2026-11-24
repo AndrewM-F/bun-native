@@ -255,26 +255,36 @@ static NSInteger session_moves(CGPoint *point) {
 static NSDictionary *windows_at_point(NSArray *windows, CGPoint point) {
     NSMutableArray *matches = [NSMutableArray array];
     NSUInteger count = 0;
+    NSUInteger unknownBounds = 0;
+    NSUInteger incomplete = 0;
     for (NSDictionary *window in windows) {
-        if (![window isKindOfClass:NSDictionary.class]) continue;
+        if (![window isKindOfClass:NSDictionary.class]) { unknownBounds++; continue; }
         CGRect bounds = CGRectZero;
         id dictionary = window[(__bridge NSString *)kCGWindowBounds];
         if (![dictionary isKindOfClass:NSDictionary.class] ||
             !CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)dictionary, &bounds) ||
-            !CGRectContainsPoint(bounds, point)) continue;
+            !isfinite(bounds.origin.x) || !isfinite(bounds.origin.y) ||
+            !isfinite(bounds.size.width) || !isfinite(bounds.size.height)) {
+            unknownBounds++;
+            continue;
+        }
+        if (!CGRectContainsPoint(bounds, point)) continue;
         id windowID = window[(__bridge NSString *)kCGWindowNumber];
         id ownerPID = window[(__bridge NSString *)kCGWindowOwnerPID];
         id layer = window[(__bridge NSString *)kCGWindowLayer];
         id alpha = window[(__bridge NSString *)kCGWindowAlpha];
-        if (!number(windowID) || !number(ownerPID) || !number(layer) || !number(alpha)) continue;
+        if (!number(windowID) || !number(ownerPID) || !number(layer) || !number(alpha)) incomplete++;
         count++;
         if (matches.count < 20) {
-            [matches addObject:@{ @"id": windowID, @"pid": ownerPID, @"layer": layer,
-                @"alpha": alpha, @"bounds": @[@(bounds.origin.x), @(bounds.origin.y),
+            [matches addObject:@{ @"id": number(windowID) ? windowID : NSNull.null,
+                @"pid": number(ownerPID) ? ownerPID : NSNull.null,
+                @"layer": number(layer) ? layer : NSNull.null,
+                @"alpha": number(alpha) ? alpha : NSNull.null, @"bounds": @[@(bounds.origin.x), @(bounds.origin.y),
                     @(bounds.size.width), @(bounds.size.height)] }];
         }
     }
-    return @{ @"windows": matches, @"matchingCount": @(count), @"truncated": @(count > matches.count) };
+    return @{ @"windows": matches, @"matchingCount": @(count), @"truncated": @(count > matches.count),
+        @"unknownBounds": @(unknownBounds), @"incompleteMetadata": @(incomplete) };
 }
 
 static NSDictionary *inspect(CGPoint point) {

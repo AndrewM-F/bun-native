@@ -78,9 +78,11 @@ int main(void) {
                 (__bridge NSString *)kCGWindowName: @"private title" }];
         }
         [windows addObject:@{ (__bridge NSString *)kCGWindowBounds: bounds }];
+        [windows addObject:@{}];
         NSDictionary *stack = windows_at_point(windows, CGPointMake(110, 110));
         NSArray *reported = stack[@"windows"];
-        if ([stack[@"matchingCount"] intValue] != 22 || ![stack[@"truncated"] boolValue] ||
+        if ([stack[@"matchingCount"] intValue] != 23 || ![stack[@"truncated"] boolValue] ||
+            [stack[@"unknownBounds"] intValue] != 1 || [stack[@"incompleteMetadata"] intValue] != 1 ||
             reported.count != 20 || [reported[0][@"id"] intValue] != 0 ||
             [reported[19][@"id"] intValue] != 19 || [reported[0] count] != 5) {
             fprintf(stderr, "Window stack evidence was not bounded or ordered\n");
