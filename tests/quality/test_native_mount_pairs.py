@@ -12,6 +12,15 @@ spec.loader.exec_module(pairs)
 
 
 class NativeMountPairsTests(unittest.TestCase):
+    def test_identical_hosts_cannot_be_reported_as_a_comparison(self):
+        with self.assertRaises(ValueError):
+            pairs.require_distinct_hosts(
+                {"base_host": "same", "candidate_host": "same"}
+            )
+        pairs.require_distinct_hosts(
+            {"base_host": "base", "candidate_host": "candidate"}
+        )
+
     def test_requires_exact_host_runtime_and_samples(self):
         host = Path("/example/native-host")
         result = {

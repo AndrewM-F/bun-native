@@ -22,6 +22,11 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def require_distinct_hosts(frozen):
+    if frozen["base_host"] == frozen["candidate_host"]:
+        raise ValueError("Baseline and candidate hosts are identical")
+
+
 def validate(result, host, bun_revision):
     if result.get("status") != "passed" or result.get("host") != str(host):
         raise ValueError("Wrong host or failed workload")
@@ -77,6 +82,7 @@ def main():
         name: digest(paths[name])
         for name in ("base_host", "candidate_host", "base_aot", "candidate_aot", "bun")
     }
+    require_distinct_hosts(frozen)
     frozen["base_renderer"] = digest(
         paths["base_source"] / "packages/renderer/src/native-tree.ts"
     )

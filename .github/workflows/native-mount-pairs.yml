@@ -71,17 +71,23 @@ jobs:
         timeout-minutes: 80
         run: |
           set -euo pipefail
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/native-mount-target"
           for variant in base candidate; do
             if [[ "$variant" == base ]]; then source_dir="$GITHUB_WORKSPACE/.baseline"; else source_dir="$GITHUB_WORKSPACE"; fi
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/native-mount-target-$variant"
             (cd "$source_dir"; cargo build --locked --release -p bun-native-host --bin bun-native-host; bun install --frozen-lockfile --ignore-scripts)
             mkdir -p "$RUNNER_TEMP/native-mount-$variant"
             cp "$CARGO_TARGET_DIR/release/bun-native-host" "$RUNNER_TEMP/native-mount-$variant/host"
+            rm -rf "$CARGO_TARGET_DIR"
             MOUNT_SOURCE="$source_dir" MOUNT_OUTPUT="$RUNNER_TEMP/native-mount-$variant/app" bun -e '
               import { compileApplication } from "./scripts/native/compile.ts";
               console.log(JSON.stringify(compileApplication(process.env.MOUNT_SOURCE! + "/benchmarks/renderer/native-mount.ts", process.env.MOUNT_OUTPUT!, process.env.MOUNT_SOURCE!)));
             ' > "$RUNNER_TEMP/native-mount-$variant/inspection.json"
           done
+          sha256sum "$RUNNER_TEMP/native-mount-base/host" "$RUNNER_TEMP/native-mount-candidate/host" | tee "$RUNNER_TEMP/native-mount-host-sha256.txt"
+          if cmp -s "$RUNNER_TEMP/native-mount-base/host" "$RUNNER_TEMP/native-mount-candidate/host"; then
+            echo 'Baseline and candidate host binaries are identical; refusing a candidate comparison.' >&2
+            exit 1
+          fi
       - name: Collect development and AOT pairs
         timeout-minutes: 60
         run: |
@@ -103,6 +109,7 @@ jobs:
             ${{ runner.temp }}/native-mount-pairs/
             ${{ runner.temp }}/native-mount-session/
             ${{ runner.temp }}/native-mount-changed.txt
+            ${{ runner.temp }}/native-mount-host-sha256.txt
             ${{ runner.temp }}/native-mount-base/*.json
             ${{ runner.temp }}/native-mount-candidate/*.json
             !${{ runner.temp }}/native-mount-session/runtime/
