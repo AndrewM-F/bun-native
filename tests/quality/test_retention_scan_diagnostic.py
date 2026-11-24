@@ -106,6 +106,33 @@ class RetentionScanDiagnosticTests(unittest.TestCase):
                 )[0]["records"],
                 8,
             )
+            with self.assertRaises(ValueError):
+                CONTROL.inspect_collector_traces(
+                    directory,
+                    normal_edges=True,
+                    scan_slots=True,
+                    scan_origins=True,
+                    clear_bounds=True,
+                    unwind=True,
+                )
+            trace.write_bytes(
+                header(11, 11)
+                + b"".join(
+                    struct.pack("<QQII", 1, 2, kind, 0)
+                    for kind in (1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13)
+                )
+            )
+            self.assertEqual(
+                CONTROL.inspect_collector_traces(
+                    directory,
+                    normal_edges=True,
+                    scan_slots=True,
+                    scan_origins=True,
+                    clear_bounds=True,
+                    unwind=True,
+                )[0]["records"],
+                11,
+            )
             trace.write_bytes(header(2, 1) + bytes(24))
             with self.assertRaises(ValueError):
                 CONTROL.inspect_collector_traces(directory)
