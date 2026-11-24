@@ -115,6 +115,20 @@ class CollectorTraceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             INSTRUMENT.transform_machine(transformed)
 
+    def test_clear_bounds_adds_only_markers_and_preserves_zeroing(self):
+        source = (
+            b"static NEVER_INLINE SUPPRESS_ASAN void clearStackBelowCaller()\n"
+            b"    for (size_t i = 0; i < size; ++i)\n        dead[i] = 0;\n"
+            b"    const uint64_t bnTraceEpoch = BNCollectorTraceBegin();\n"
+        )
+        transformed = INSTRUMENT.transform_clear_bounds(source)
+        self.assertIn(b"dead[i] = 0;\n    BNCollectorTraceRecord(9,", transformed)
+        self.assertIn(
+            b"BNCollectorTraceRecord(10, &bnTraceEpoch, &bnTraceEpoch + 1)", transformed
+        )
+        with self.assertRaises(ValueError):
+            INSTRUMENT.transform_clear_bounds(transformed)
+
     @unittest.skipIf(
         os.name == "nt" or not shutil.which("clang++"),
         "requires clang++ and POSIX environment",

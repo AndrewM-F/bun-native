@@ -64,6 +64,31 @@ def transform_machine(data):
     return data
 
 
+def transform_clear_bounds(data):
+    if b"BNCollectorTraceRecord(9," in data:
+        raise ValueError("Stack clear helper is already instrumented")
+    marker = b"static NEVER_INLINE SUPPRESS_ASAN void clearStackBelowCaller()\n"
+    data = replace_once(
+        data,
+        marker,
+        b'extern "C" void BNCollectorTraceRecord(uint32_t, const void*, const void*);\n'
+        + marker,
+    )
+    loop = b"    for (size_t i = 0; i < size; ++i)\n        dead[i] = 0;\n"
+    data = replace_once(
+        data,
+        loop,
+        loop
+        + b"    BNCollectorTraceRecord(9, const_cast<const char*>(&dead[0]), const_cast<const char*>(&dead[size]));\n",
+    )
+    marker = b"    const uint64_t bnTraceEpoch = BNCollectorTraceBegin();\n"
+    return replace_once(
+        data,
+        marker,
+        marker + b"    BNCollectorTraceRecord(10, &bnTraceEpoch, &bnTraceEpoch + 1);\n",
+    )
+
+
 def transform(roots, visitor, bindings, normal_edges=False, scan_slots=False):
     if scan_slots and not normal_edges:
         raise ValueError("Slot tracing requires normal edges")
@@ -147,15 +172,24 @@ def main():
         )
     if len(sys.argv) not in (4, 5) or (
         len(sys.argv) == 5
-        and sys.argv[4] not in ("--normal-edges", "--scan-slots", "--scan-origin")
+        and sys.argv[4]
+        not in ("--normal-edges", "--scan-slots", "--scan-origin", "--clear-range")
     ):
         raise ValueError(
             "Expected bun, webkit, manifest and a known optional trace mode"
         )
     bun, webkit, manifest = (Path(x).resolve() for x in sys.argv[1:4])
     normal_edges = len(sys.argv) == 5
-    scan_slots = len(sys.argv) == 5 and sys.argv[4] in ("--scan-slots", "--scan-origin")
-    scan_origin = len(sys.argv) == 5 and sys.argv[4] == "--scan-origin"
+    scan_slots = len(sys.argv) == 5 and sys.argv[4] in (
+        "--scan-slots",
+        "--scan-origin",
+        "--clear-range",
+    )
+    scan_origin = len(sys.argv) == 5 and sys.argv[4] in (
+        "--scan-origin",
+        "--clear-range",
+    )
+    clear_range = len(sys.argv) == 5 and sys.argv[4] == "--clear-range"
     workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
     runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if bun != workspace / "bun-source" or webkit != workspace / "webkit-source":
@@ -176,6 +210,8 @@ def main():
     if tuple(map(sha, original)) != expected:
         raise ValueError("Upstream collector sources differ from pinned revisions")
     adjusted = transform(*original, normal_edges=normal_edges, scan_slots=scan_slots)
+    if clear_range:
+        adjusted = (adjusted[0], adjusted[1], transform_clear_bounds(adjusted[2]))
     declaration_path = paths[0].with_suffix(".h")
     declaration = None
     machine_path = paths[0].parent / "MachineStackMarker.cpp"
@@ -208,7 +244,9 @@ def main():
         "originalSha256": list(map(sha, original)),
         "instrumentedSha256": list(map(sha, adjusted)),
         "headerSha256": sha(content),
-        "eventKinds": [1, 2, 3, 4, 5, 6, 7, 8]
+        "eventKinds": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        if clear_range
+        else [1, 2, 3, 4, 5, 6, 7, 8]
         if scan_origin
         else [1, 2, 3, 4, 5]
         if scan_slots
