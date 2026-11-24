@@ -61,6 +61,7 @@ on:
             'runtime-libuv-poll-clear-io',
             'runtime-libuv-poll-clear-jit-aot',
             'runtime-libuv-poll-clear-jit-native',
+            'runtime-libuv-poll-clear-jit-native-fixture',
             'runtime-libuv-noinline-compare',
             'runtime-libuv-native-compare',
             'runtime-libuv-native-calibration',
@@ -1270,6 +1271,123 @@ jobs:
             !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
           if-no-files-found: warn
           retention-days: 30
+
+  windows-runtime-libuv-poll-clear-jit-native-fixture:
+    name: Compare fixture cleanup and buffer clearing in native JIT-present AOT
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-poll-clear-jit-native-fixture' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          release-target: 'true'
+          remap-cargo-home: 'true'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45392902254') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45392902254'; head = '3aa26c7fc1c2bd17d0e9edc84074adb36c5d34ce'; artifact = 'windows-libuv-poll-clear-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.mode -ne 'clear' -or $manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Install source-pinned fixture cleanup control
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'native-fixture-control'
+          New-Item -ItemType Directory $fixture | Out-Null
+          python benchmarks/retention/prepare-native-fixture.py $fixture safe-clear
+          if ($LASTEXITCODE -ne 0) { throw 'Fixture cleanup control preparation failed' }
+      - name: Build the real native host and diagnostic React module
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem -Directory $sdk | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (!$fxc) { throw 'Windows SDK fxc.exe unavailable' }
+          $env:GPUI_FXC_PATH = $fxc
+          cargo build --locked --release -p bun-native-host
+          if ($LASTEXITCODE -ne 0) { throw 'Native host build failed' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $env:CONTROL_OUT = Join-Path $root 'bundle'
+          bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"react",entry:"benchmarks/solid/react.tsx",outdir:process.env.CONTROL_OUT,cwd:process.cwd()})'
+          if ($LASTEXITCODE -ne 0) { throw 'React module bundle failed' }
+      - name: Compile and inspect JIT-present AOT applications
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $module = Join-Path $root 'bundle/application.js'
+          $inspect = 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); console.log(JSON.stringify({graph,runtime},null,2)); if (!graph.hasCompiledProgram || runtime.jit !== "present") throw new Error("Expected compiled program with JIT present")'
+          foreach ($entry in @(@{name='baseline'; runtime=$env:BASELINE_RUNTIME}, @{name='candidate'; runtime=$env:SOURCE_RUNTIME})) {
+            $app = Join-Path $root "$($entry.name)-jit-aot.exe"
+            & $entry.runtime --no-install compile --no-script --production --explain=json $module --outfile $app *> (Join-Path $root "$($entry.name)-compile.log")
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic AOT compilation failed' }
+            bun -e $inspect $app *> (Join-Path $root "$($entry.name)-inspection.json")
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic AOT inspection failed' }
+            Get-FileHash -Algorithm SHA256 $app | ConvertTo-Json | Set-Content (Join-Path $root "$($entry.name)-application-hash.json")
+          }
+      - name: Compare native paint calibration and 100-mount AOT workloads
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $baseline = Join-Path $root 'baseline-jit-aot.exe'
+          $candidate = Join-Path $root 'candidate-jit-aot.exe'
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-calibration') --aot-jit-present-calibration
+          if ($LASTEXITCODE -ne 0) { throw 'JIT-present native paint calibration was invalid' }
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-pairs') --aot-jit-present
+          if ($LASTEXITCODE -ne 0) { throw 'JIT-present native workload was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-poll-clear-jit-native-fixture
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            ${{ runner.temp }}/native-fixture-control/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Restore the original fixture
+        if: ${{ always() }}
+        run: |
+          $original = Join-Path $env:RUNNER_TEMP 'native-fixture-control/original-react.tsx.txt'
+          if (Test-Path -LiteralPath $original) {
+            Copy-Item -LiteralPath $original -Destination 'benchmarks/solid/react.tsx' -Force
+            if ((Get-FileHash -Algorithm SHA256 'benchmarks/solid/react.tsx').Hash.ToLowerInvariant() -ne 'ce636a55012d21d54cecc89ad0664d76d3ef9fc0a83211ca27bd301d350745a1') { throw 'Fixture restoration failed' }
+          }
 
   windows-runtime-native-trim-compare:
     name: Compare native-built trimmed AOT runtime on Windows
