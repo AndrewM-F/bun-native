@@ -822,6 +822,12 @@ jobs:
           $env:CONTROL_OUT = Join-Path $root 'bundle'
           bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"react",entry:"benchmarks/solid/react.tsx",outdir:process.env.CONTROL_OUT,cwd:process.cwd()})'
           if ($LASTEXITCODE -ne 0) { throw 'React module bundle failed' }
+      - name: Qualify native paint before timing
+        if: inputs.retention-diagnostic == 'runtime-libuv-native-performance'
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'native-calibration') --calibration
+          if ($LASTEXITCODE -ne 0) { throw 'Native paint or ownership calibration was invalid' }
       - name: Run alternating native development controls
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
