@@ -59,10 +59,15 @@ def mode_settings(args):
         ["--calibration"],
         ["--performance"],
         ["--aot-jit-present"],
+        ["--aot-jit-present-extended"],
         ["--aot-jit-present-calibration"],
     ):
         raise ValueError("Unexpected arguments")
-    aot = args in (["--aot-jit-present"], ["--aot-jit-present-calibration"])
+    aot = args in (
+        ["--aot-jit-present"],
+        ["--aot-jit-present-calibration"],
+        ["--aot-jit-present-extended"],
+    )
     calibration = args in (["--calibration"], ["--aot-jit-present-calibration"])
     performance = args == ["--performance"]
     mounts = 2 if calibration else 100
@@ -76,7 +81,9 @@ def main():
     if any(key.startswith("BUN_JSC_") for key in os.environ):
         raise ValueError("Unexpected inherited JSC options")
     aot, calibration, performance, mounts, iterations = mode_settings(sys.argv[6:])
-    pair_count = 12 if performance else 3
+    pair_count = (
+        12 if performance or sys.argv[6:] == ["--aot-jit-present-extended"] else 3
+    )
     host, module, baseline, candidate = [
         Path(x).resolve(strict=True) for x in sys.argv[1:5]
     ]
@@ -93,7 +100,7 @@ def main():
                 "pairs": pair_count,
                 "order": "alternating AB/BA; one baseline A/A pair after every two AB pairs"
                 if performance
-                else "AB/BA/AB",
+                else "alternating AB/BA",
                 "scope": f"Actual native React {'JIT-present compiled-program diagnostic' if aot else 'development'} workload, {iterations} updates and rotations, {mounts} mount cycles, calibration={calibration}, DFG {'default' if performance or aot else 'disabled'}; not trimmed AOT or cross-product performance qualification.",
             },
             indent=2,

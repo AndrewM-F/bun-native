@@ -36,6 +36,10 @@ class NativeRuntimePairsTest(unittest.TestCase):
             PAIRS.mode_settings(["--aot-jit-present-calibration"]),
             (True, True, False, 2, 20),
         )
+        self.assertEqual(
+            PAIRS.mode_settings(["--aot-jit-present-extended"]),
+            (True, False, False, 100, 1000),
+        )
         with self.assertRaises(ValueError):
             PAIRS.mode_settings(["--aot-jit-present", "--performance"])
 
