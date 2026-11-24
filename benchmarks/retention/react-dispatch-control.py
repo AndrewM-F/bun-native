@@ -209,12 +209,45 @@ def first_observation_workload(source, omit):
     return replace_once(source, original, "      const firstReachable: number[] = []\n")
 
 
+def timer_collection_workload(source, timer):
+    first = "      await Bun.sleep(1)\n      Bun.gc(true)\n      const firstReachable"
+    heap = "  Bun.gc(true)\n  const stats = heapStats()"
+    if not timer:
+        if source.count(first) != 1 or source.count(heap) != 1:
+            raise ValueError("Expected both collection markers")
+        return source
+    call = "await new Promise<void>((resolve, reject) => setTimeout(() => { try { Bun.gc(true); resolve() } catch (error) { reject(error) } }, 0))"
+    source = replace_once(
+        source,
+        first,
+        "      await Bun.sleep(1)\n      " + call + "\n      const firstReachable",
+    )
+    return replace_once(
+        source,
+        heap,
+        "  if (phase.startsWith('all views disposed;')) "
+        + call
+        + "\n  else Bun.gc(true)\n  const stats = heapStats()",
+    )
+
+
+def timer_collection_entry(source, pin):
+    source = shutdown_entry(source, pin)
+    if pin:
+        source = replace_once(
+            source,
+            ".__retentionDiagnosticPin = view\n",
+            ".__retentionDiagnosticPin = [view, listener]\n",
+        )
+    return source
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
 def workload_hashes(kind, workloads):
-    if kind in ("cycle", "first-observation"):
+    if kind in ("cycle", "first-observation", "timer-collection"):
         return {name: digest(text.encode()) for name, text in workloads.items()}
     if kind == "shutdown":
         return digest(workloads["baseline"].encode())
@@ -251,7 +284,15 @@ def main():
     # AOT reference with the distributed compiler. The runtime under test is
     # still passed to the headless development workload below.
     compiler = os.environ.get("CONTROL_AOT_REFERENCE_COMPILER") or runtime or "bun"
-    if kind not in ("dispatch", "shutdown", "cycle", "first-observation", "listener", "safe-listener"):
+    if kind not in (
+        "dispatch",
+        "shutdown",
+        "cycle",
+        "first-observation",
+        "timer-collection",
+        "listener",
+        "safe-listener",
+    ):
         raise ValueError("Unknown control kind")
     if not 1 <= trials <= 10:
         raise ValueError("Trial count must be in 1..10")
@@ -261,7 +302,7 @@ def main():
     workload_path = fixture.parent / "workload.ts"
     original_workload = (
         workload_path.read_text(encoding="utf-8")
-        if kind in ("shutdown", "cycle", "first-observation")
+        if kind in ("shutdown", "cycle", "first-observation", "timer-collection")
         else None
     )
     variants = (
@@ -271,6 +312,8 @@ def main():
         if kind == "cycle"
         else ("baseline", "omit-first", "pin-baseline", "pin-omit-first")
         if kind == "first-observation"
+        else ("baseline", "timer", "pin-baseline", "pin-timer")
+        if kind == "timer-collection"
         else (
             "baseline",
             "clear-setters",
@@ -291,12 +334,16 @@ def main():
         if kind == "cycle"
         else first_observation_workload(original_workload, name.endswith("omit-first"))
         if kind == "first-observation"
+        else timer_collection_workload(original_workload, name.endswith("timer"))
+        if kind == "timer-collection"
         else None
         for name in variants
     }
     sources = {
         name: (
-            shutdown_entry(
+            timer_collection_entry(source, name.startswith("pin-"))
+            if kind == "timer-collection"
+            else shutdown_entry(
                 source,
                 (kind == "shutdown" and name == "pin")
                 or (kind == "first-observation" and name.startswith("pin-")),
@@ -331,7 +378,14 @@ def main():
         "trialsPerVariant": trials,
         "ordering": (
             f"{variants} on even pairs; reverse on odd pairs"
-            if kind in ("cycle", "first-observation", "listener", "safe-listener")
+            if kind
+            in (
+                "cycle",
+                "first-observation",
+                "timer-collection",
+                "listener",
+                "safe-listener",
+            )
             else f"{variants[0]} then {variants[1]} on even pairs; reverse on odd pairs"
         ),
         "difference": (
@@ -341,6 +395,8 @@ def main():
             if kind == "cycle"
             else "Omit-first skips only the diagnostic first dereference; pinned variants retain the latest render root globally."
             if kind == "first-observation"
+            else "Timer variants call the same two GC checkpoints in separate timer callbacks; pins deliberately retain the latest root."
+            if kind == "timer-collection"
             else "All variants cache the disposal promise; clear releases the listener and view, and pins deliberately retain each target."
             if kind == "safe-listener"
             else "The variants clear setters or the listener after disposal, or intentionally pin the listener as a positive control."
@@ -365,7 +421,7 @@ def main():
                     f.write(workload)
                 workload_name = (
                     f"{variant}-instrumented-workload.ts.txt"
-                    if kind in ("cycle", "first-observation")
+                    if kind in ("cycle", "first-observation", "timer-collection")
                     else "instrumented-workload.ts.txt"
                 )
                 save_variant(output / workload_name, workload)
@@ -458,13 +514,21 @@ def main():
                             (child_output / f"00-{record['mode']}.json").read_text()
                         )
                         valid = valid and cycle_pin_valid(raw, record["mode"])
-                if valid and kind in ("listener", "safe-listener") and variant.endswith("pin-listener"):
+                if (
+                    valid
+                    and kind in ("listener", "safe-listener")
+                    and variant.endswith("pin-listener")
+                ):
                     for record in records:
                         raw = json.loads(
                             (child_output / f"00-{record['mode']}.json").read_text()
                         )
                         valid = valid and listener_pin_valid(raw, record["mode"])
-                if valid and kind in ("listener", "safe-listener") and variant.endswith("pin-root"):
+                if (
+                    valid
+                    and kind in ("listener", "safe-listener")
+                    and variant.endswith("pin-root")
+                ):
                     for record in records:
                         raw = json.loads(
                             (child_output / f"00-{record['mode']}.json").read_text()
@@ -482,6 +546,16 @@ def main():
                             )
                         if variant.startswith("pin-"):
                             valid = valid and cycle_pin_valid(raw, record["mode"])
+                if valid and kind == "timer-collection" and variant.startswith("pin-"):
+                    for record in records:
+                        raw = json.loads(
+                            (child_output / f"00-{record['mode']}.json").read_text()
+                        )
+                        valid = (
+                            valid
+                            and cycle_pin_valid(raw, record["mode"])
+                            and listener_pin_valid(raw, record["mode"])
+                        )
                 result = {
                     "trial": trial,
                     "variant": variant,

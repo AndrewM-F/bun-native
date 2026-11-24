@@ -27,6 +27,7 @@ on:
             'native-safe-fixture',
             'shutdown',
             'first-observation',
+            'timer-collection',
             'runtime-preflight',
             'runtime-cross-preflight',
             'runtime-cross-tools',
@@ -1510,7 +1511,7 @@ jobs:
 
   windows-listener-control:
     name: Windows listener retention control
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["listener", "safe-listener", "core-ownership", "core-group", "shutdown", "first-observation"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["listener", "safe-listener", "core-ownership", "core-group", "shutdown", "first-observation", "timer-collection"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 45
     defaults:

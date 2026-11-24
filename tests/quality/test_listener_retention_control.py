@@ -73,8 +73,14 @@ class ListenerRetentionControlTests(unittest.TestCase):
     def test_cached_disposal_is_repeatable_and_preserves_failures(self):
         source = (ROOT / "benchmarks/solid/react.tsx").read_text()
         generated = CONTROL.listener_source(source, "safe-clear")
-        method = next(line.strip() for line in generated.splitlines() if line.strip().startswith("dispose()"))
-        method = method.removesuffix(",").replace("view = undefined!;", "view = undefined;")
+        method = next(
+            line.strip()
+            for line in generated.splitlines()
+            if line.strip().startswith("dispose()")
+        )
+        method = method.removesuffix(",").replace(
+            "view = undefined!;", "view = undefined;"
+        )
         script = """
 const assert = require('node:assert/strict');
 async function check(fail) {
@@ -126,6 +132,27 @@ check(false).then(() => check(true)).catch(error => { console.error(error); proc
         self.assertIn("const stillReachable = probes.flatMap", omitted)
         self.assertIn("if (stillReachable.length > 0)", omitted)
         self.assertEqual(omitted.count("Bun.gc(true)"), source.count("Bun.gc(true)"))
+
+    def test_timer_control_changes_task_boundary_not_assertion_or_collection_count(
+        self,
+    ):
+        source = (ROOT / "benchmarks/solid/workload.ts").read_text()
+        self.assertEqual(CONTROL.timer_collection_workload(source, False), source)
+        timer = CONTROL.timer_collection_workload(source, True)
+        self.assertEqual(
+            timer.count("setTimeout(() => { try { Bun.gc(true); resolve() }"), 2
+        )
+        self.assertIn("else Bun.gc(true)\n  const stats = heapStats()", timer)
+        self.assertIn("const firstReachable = probes.flatMap", timer)
+        self.assertIn("const stillReachable = probes.flatMap", timer)
+        self.assertIn("assert.equal(stillReachable.length, 0", timer)
+        entry = (ROOT / "benchmarks/solid/react.tsx").read_text()
+        self.assertIn(
+            "__retentionDiagnosticPin = [view, listener]",
+            CONTROL.timer_collection_entry(entry, True),
+        )
+        with self.assertRaises(ValueError):
+            CONTROL.timer_collection_workload(timer, True)
 
 
 if __name__ == "__main__":
