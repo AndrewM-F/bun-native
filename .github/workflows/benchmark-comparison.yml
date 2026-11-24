@@ -50,6 +50,7 @@ on:
             'runtime-unwind-preflight',
             'runtime-libuv-noinline-build',
             'runtime-libuv-noinline-compare',
+            'runtime-libuv-native-compare',
             'runtime-unwind-build',
             'runtime-unwind-trace-compare',
             'runtime-origin-trace-compare',
@@ -749,6 +750,86 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-libuv-noinline-comparison
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-libuv-native-compare:
+    name: Compare libuv poll layout with a native Windows host
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-native-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          release-target: 'true'
+          remap-cargo-home: 'true'
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45374563413') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45374563413'; head = 'aaed3492f9edf0926baa766c855e4254cf0073ef'; artifact = 'windows-libuv-noinline-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '379c7a1859166bd415e28f97412b4e5b0fab221bb438e40e8bd5c17b6698cce8' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'cf5598296da736c817c4321f007c11d76ebe6212442d34d2b124bc02ba4c9a7c') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Build the real native host and unchanged React module
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem -Directory $sdk | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (!$fxc) { throw 'Windows SDK fxc.exe unavailable' }
+          $env:GPUI_FXC_PATH = $fxc
+          cargo build --locked --release -p bun-native-host
+          if ($LASTEXITCODE -ne 0) { throw 'Native host build failed' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $env:CONTROL_OUT = Join-Path $root 'bundle'
+          bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"react",entry:"benchmarks/solid/react.tsx",outdir:process.env.CONTROL_OUT,cwd:process.cwd()})'
+          if ($LASTEXITCODE -ne 0) { throw 'React module bundle failed' }
+      - name: Run alternating native development controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'native-pairs')
+          if ($LASTEXITCODE -ne 0) { throw 'At least one native workload was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-native-comparison
           path: |
             ${{ runner.temp }}/libuv-noinline-comparison/
             !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
