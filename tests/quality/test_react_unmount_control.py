@@ -22,6 +22,10 @@ class ReactUnmountControlTests(unittest.TestCase):
         self.assertIn("__unmountDiagnosticPins = [view, listener]", pinned)
         safe = CONTROL.safe_fixture(entry)
         self.assertIn("setText = undefined!; setRows = undefined!;", safe)
+        self.assertNotIn(
+            "setText = undefined!; setRows = undefined!;",
+            CONTROL.safe_fixture(entry, clear_setters=False),
+        )
         self.assertIn(
             "__unmountDiagnosticPins = [view, listener]", CONTROL.pin_source(safe)
         )

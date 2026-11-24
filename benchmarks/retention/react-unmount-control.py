@@ -45,7 +45,7 @@ def pin_source(source):
     )
 
 
-def safe_fixture(source):
+def safe_fixture(source, clear_setters=True):
     path = Path("benchmarks/retention/react-dispatch-control.py")
     spec = importlib.util.spec_from_file_location("react_dispatch_control", path)
     if spec is None or spec.loader is None:
@@ -53,6 +53,8 @@ def safe_fixture(source):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     source = module.listener_source(source, "safe-clear")
+    if not clear_setters:
+        return source
     return replace_once(
         source,
         " listener = undefined; view = undefined!;",
@@ -80,16 +82,26 @@ def main():
     original_mount = Path("packages/react/src/mount.ts").read_text(encoding="utf8")
     original_entry = Path("benchmarks/solid/react.tsx").read_text(encoding="utf8")
     fixture_mode = sys.argv[3] if len(sys.argv) > 3 else "original"
-    if fixture_mode not in ("original", "safe"):
+    if fixture_mode not in ("original", "safe", "fixture-pair"):
         raise ValueError("Unknown fixture mode")
-    if fixture_mode == "safe":
+    if fixture_mode == "fixture-pair":
+        candidate_entry = safe_fixture(original_entry)
+        original_entry = safe_fixture(original_entry, clear_setters=False)
+    elif fixture_mode == "safe":
         original_entry = safe_fixture(original_entry)
+        candidate_entry = original_entry
+    else:
+        candidate_entry = original_entry
     variants = ("baseline", "candidate", "baseline-pin", "candidate-pin")
     sources = {
         "baseline-mount": original_mount,
-        "candidate-mount": candidate_source(original_mount),
+        "candidate-mount": original_mount
+        if fixture_mode == "fixture-pair"
+        else candidate_source(original_mount),
         "entry": original_entry,
         "pin-entry": pin_source(original_entry),
+        "candidate-entry": candidate_entry,
+        "candidate-pin-entry": pin_source(candidate_entry),
     }
     for name, text in sources.items():
         (output / f"{name}.ts.txt").write_text(text, encoding="utf8", newline="\n")
@@ -101,7 +113,7 @@ def main():
         "peerSha256": digest(peer),
         "runtimeSha256": digest(Path(runtime)),
         "sources": {name: digest(output / f"{name}.ts.txt") for name in sources},
-        "scope": "Headless only; two extra React commits are experimental and are not native or performance qualification.",
+        "scope": "Headless only; fixture-pair changes only fixture setter cleanup. Other modes test extra React commits. Neither is native or performance qualification.",
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     bundle = r"""import { bundleApplication } from "./scripts/native/bundle.ts";
@@ -117,7 +129,9 @@ if(mounts!==1||entries!==1)throw new Error(`unexpected substitutions ${mounts} $
         mount = (
             "candidate-mount" if variant.startswith("candidate") else "baseline-mount"
         )
-        entry = "pin-entry" if variant.endswith("-pin") else "entry"
+        entry = ("candidate-" if variant.startswith("candidate") else "") + (
+            "pin-entry" if variant.endswith("-pin") else "entry"
+        )
         env = {
             **os.environ,
             "CONTROL_MOUNT": str(output / f"{mount}.ts.txt"),

@@ -19,6 +19,7 @@ on:
             'safe-listener',
             'react-empty-unmount',
             'react-empty-safe',
+            'react-fixture-setters',
             'core-ownership',
             'core-group',
             'fixture-core-matrix',
@@ -1315,8 +1316,8 @@ jobs:
           retention-days: 30
 
   windows-react-empty-unmount:
-    name: Windows experimental React unmount control
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["react-empty-unmount", "react-empty-safe"]'), inputs.retention-diagnostic)
+    name: Windows paired React retention control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["react-empty-unmount", "react-empty-safe", "react-fixture-setters"]'), inputs.retention-diagnostic)
     runs-on: windows-2022
     timeout-minutes: 70
     permissions:
@@ -1336,7 +1337,7 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP 'react-unmount-control'
           bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $env:RUNNER_TEMP 'react-unmount-peer.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Headless peer build failed' }
-          $fixture = if ('${{ inputs.retention-diagnostic }}' -eq 'react-empty-safe') { 'safe' } else { 'original' }
+          $fixture = if ('${{ inputs.retention-diagnostic }}' -eq 'react-empty-safe') { 'safe' } elseif ('${{ inputs.retention-diagnostic }}' -eq 'react-fixture-setters') { 'fixture-pair' } else { 'original' }
           python benchmarks/retention/react-unmount-control.py (Join-Path $env:RUNNER_TEMP 'react-unmount-peer.exe') $root $fixture
           if ($LASTEXITCODE -ne 0) { throw 'A paired source or pin control was invalid' }
       - name: Retain all observations, including failures
