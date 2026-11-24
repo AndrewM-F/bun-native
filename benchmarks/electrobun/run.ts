@@ -220,6 +220,7 @@ function sha256(path: string) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
+const startedAt = new Date().toISOString()
 const launches = [await launch('first')]
 for (let trial = 1; trial <= trials; trial++) launches.push(await launch(`trial-${trial}`))
 const measured = launches.slice(1).filter((item) => item.status === 'passed')
@@ -250,7 +251,7 @@ const record = {
     includedInSummary: false,
   },
   failedLaunches: failedLaunches(launches),
-  startedAt: new Date().toISOString(),
+  startedAt,
   command: process.argv,
   artifacts: artifactSizes(values.app),
   app: {

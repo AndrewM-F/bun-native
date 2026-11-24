@@ -52,6 +52,7 @@ JSON`
       expect(events.slice(0, 12)).toEqual(Array(4).fill(['load', 'power', 'launch']).flat())
       const record = JSON.parse(readFileSync(join(output, 'electrobun.json'), 'utf8'))
       expect(record.status).toBe('passed')
+      expect(Date.parse(record.startedAt)).toBeLessThanOrEqual(record.launches[0].spawnEpochMs)
       for (const launch of record.launches) {
         expect(launch.loadAverageBeforeLaunch).toBe('mock-load')
         expect(launch.powerBeforeLaunch).toBe('mock-power')
