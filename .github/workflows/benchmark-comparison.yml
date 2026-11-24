@@ -16,6 +16,7 @@ on:
             'narrow-scan',
             'batch-release',
             'listener',
+            'fixture-core-matrix',
             'shutdown',
             'first-observation',
             'runtime-preflight',
@@ -1094,6 +1095,41 @@ jobs:
           path: |
             ${{ runner.temp }}/batch-release-control/
             !${{ runner.temp }}/batch-release-control/**/*.exe
+          retention-days: 30
+
+  windows-fixture-core-matrix:
+    name: Windows fixture and batch ownership matrix
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'fixture-core-matrix' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 70
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Build the pinned headless peer
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'fixture-core-matrix'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+      - name: Compare fixture ownership controls under both batch variants
+        run: |
+          python benchmarks/retention/fixture-core-matrix.py (Join-Path $env:RUNNER_TEMP 'fixture-core-matrix')
+          if ($LASTEXITCODE -ne 0) { throw 'The fixture and batch ownership matrix failed' }
+      - name: Retain every control and source identity
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-fixture-core-matrix
+          path: |
+            ${{ runner.temp }}/fixture-core-matrix/
+            !${{ runner.temp }}/fixture-core-matrix/**/*.exe
           retention-days: 30
 
   windows-listener-control:
