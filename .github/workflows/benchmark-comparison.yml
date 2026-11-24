@@ -1061,6 +1061,11 @@ jobs:
             Tools
             icu
           persist-credentials: false
+      - name: Test source-pinning safeguards
+        if: contains(fromJSON('["runtime-libuv-noinline-build", "runtime-libuv-native-trim-build", "runtime-libuv-poll-clear-build"]'), inputs.retention-diagnostic)
+        run: |
+          python -m unittest tests.quality.test_libuv_poll_controls
+          if ($LASTEXITCODE -ne 0) { throw 'Source-pinning safeguards failed' }
       - name: Provision verified LLVM and native build tools
         run: |
           $installer = Join-Path $env:RUNNER_TEMP 'llvm-23.1.1.msi'
