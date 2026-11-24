@@ -647,6 +647,27 @@ fn node_diff_reports_set_and_restructured_nodes_and_parents() {
 }
 
 #[test]
+fn fully_reached_attachment_does_not_hide_detached_nodes() {
+    let tree = Tree::new(id(1));
+    let mut operations = vec![
+        create(2, box_element()),
+        create(3, text("kept")),
+        insert(1, 2, 0),
+        insert(2, 3, 0),
+    ];
+    let prepared = tree.prepare(0, operations.clone(), 1).unwrap();
+    assert_eq!(prepared.tree.path(id(3)).unwrap(), [id(1), id(2), id(3)]);
+
+    operations.push(create(4, text("detached")));
+    let error = tree.prepare(0, operations.clone(), 1).err().unwrap();
+    assert_eq!(error.message, "batch leaves detached nodes");
+
+    // A removed attachment can still occur later in the recorded batch.
+    operations.push(delete(4));
+    assert!(tree.prepare(0, operations, 1).is_ok());
+}
+
+#[test]
 fn incremental_validation_keeps_depth_before_detachment_precedence() {
     let chain = |from: u64, under: u64, length: u64| {
         (from..from + length).flat_map(move |node| {
