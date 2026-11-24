@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import random
 import statistics
 import subprocess
@@ -151,9 +152,16 @@ def main():
         "candidateCommit": "841ea02653a54ea7a3e2ccdc80dbac6520e3b686",
         "scope": "Same X11 session, pinned Bun and common driver; observed native paint record, not presentation. Historical and current hosts and core sources differ.",
         "fixtureSha256": sha(fixtures[0]),
+        "workloadSha256": {
+            variant: sha(paths[f"{variant}_source"] / "benchmarks/solid/workload.ts")
+            for variant in ("base", "candidate")
+        },
         "driverSha256": sha(driver_path),
         "bunSha256": sha(paths["bun"]),
         "artifacts": artifacts,
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "cache": "OS page cache uncontrolled; each input launch is a fresh process",
         "ordering": "6 baseline/baseline pairs then 12 alternating baseline/candidate pairs",
         "expected": expectations,
     }
@@ -240,6 +248,9 @@ def main():
                     "position": position,
                     "variant": variant,
                     "valid": False,
+                    "loadAverageBeforeLaunch": Path("/proc/loadavg")
+                    .read_text()
+                    .strip(),
                 }
                 try:
                     child = subprocess.run(
