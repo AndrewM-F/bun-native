@@ -102,6 +102,9 @@ async function launch(name: string) {
       .filter(isWebKitHelper)
       .map((row) => row.pid)
   )
+  // Sample conditions before starting the app; these calls are outside launch timing.
+  const loadAverageBeforeLaunch = loadAverage()
+  const powerBeforeLaunch = run(['pmset', '-g', 'batt'])
   const spawnEpochMs = Date.now()
   const started = performance.now()
   const child = Bun.spawn([launcher], {
@@ -156,10 +159,9 @@ async function launch(name: string) {
   const failed = exitCode !== 0 || !report || report.error
   return {
     name,
-    // Same keys as the Bun Native controller, so an alternating block can be
-    // compared launch-for-launch on the load and power state it ran under (#677).
-    loadAverageBeforeLaunch: loadAverage(),
-    powerBeforeLaunch: run(['pmset', '-g', 'batt']),
+    // Load uses the Bun Native controller's key; power is recorded per launch here.
+    loadAverageBeforeLaunch,
+    powerBeforeLaunch,
     // Position in this run. The first launch after a build and a launch on an
     // idle machine start measurably faster than mid-sequence ones (#677), so the
     // order has to be part of the record for any paired comparison.
@@ -218,6 +220,7 @@ function sha256(path: string) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
+const startedAt = new Date().toISOString()
 const launches = [await launch('first')]
 for (let trial = 1; trial <= trials; trial++) launches.push(await launch(`trial-${trial}`))
 const measured = launches.slice(1).filter((item) => item.status === 'passed')
@@ -248,7 +251,7 @@ const record = {
     includedInSummary: false,
   },
   failedLaunches: failedLaunches(launches),
-  startedAt: new Date().toISOString(),
+  startedAt,
   command: process.argv,
   artifacts: artifactSizes(values.app),
   app: {
@@ -296,7 +299,7 @@ const record = {
       'each launch records its order; first-launch and ordering effects are excluded from medians',
     firstLaunch: 'launch "first" is reported separately and excluded from the summary',
     pairing:
-      'each launch records loadAverageBeforeLaunch and powerBeforeLaunch with the same keys as the Bun Native controller, so an alternating block is comparable launch-for-launch',
+      'each Electrobun launch records load and power before spawn; Bun Native records load before each launch and power for the run, so per-launch power is not matched',
   },
   launches,
   summary,
