@@ -5,7 +5,7 @@ import { NativeStateError, type NativeBatch } from './types.ts'
 
 /** One caller's batch callback, queued behind the transaction in flight. */
 export interface BatchEntry {
-  readonly update: (batch: NativeBatch) => unknown
+  update: (batch: NativeBatch) => unknown
   resolve(value: unknown): void
   reject(error: unknown): void
 }
@@ -43,6 +43,11 @@ function isThenable(value: unknown): boolean {
   )
 }
 
+/** A completed entry cannot run again or retain its caller's closure. */
+const consumedUpdate = () => {
+  throw new NativeStateError('invalid_state', 'Batch callback has already run')
+}
+
 /** Run one callback in its own transaction; a failure is that caller's alone. */
 function build(window: BatchWindow, entry: BatchEntry, base: Transaction | undefined): Member {
   let transaction: Transaction | undefined
@@ -62,6 +67,7 @@ function build(window: BatchWindow, entry: BatchEntry, base: Transaction | undef
   } catch (error) {
     return { entry, failed: true, error }
   } finally {
+    entry.update = consumedUpdate
     transaction?.finish()
   }
 }

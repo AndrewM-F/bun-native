@@ -7,6 +7,82 @@ name: Benchmark comparison
 on:
   workflow_dispatch:
     inputs:
+      retention-diagnostic:
+        description: Run the isolated Windows retention scan control only
+        type: choice
+        options:
+          [
+            'none',
+            'narrow-scan',
+            'batch-release',
+            'listener',
+            'safe-listener',
+            'react-empty-unmount',
+            'react-empty-safe',
+            'react-fixture-setters',
+            'core-ownership',
+            'core-group',
+            'fixture-core-matrix',
+            'native-fixture',
+            'native-safe-fixture',
+            'shutdown',
+            'first-observation',
+            'timer-collection',
+            'runtime-preflight',
+            'runtime-cross-preflight',
+            'runtime-cross-tools',
+            'runtime-cross-build',
+            'runtime-build',
+            'runtime-compare',
+            'runtime-link-control',
+            'runtime-link-inspect',
+            'runtime-rust-symbols',
+            'runtime-rust-relink',
+            'runtime-force-build',
+            'runtime-force-compare',
+            'runtime-strong-build',
+            'runtime-trace-build',
+            'runtime-full-trace-build',
+            'runtime-slot-trace-build',
+            'runtime-origin-trace-build',
+            'runtime-clear-trace-build',
+            'runtime-clear-trace-compare',
+            'runtime-unwind-preflight',
+            'runtime-libuv-noinline-build',
+            'runtime-libuv-native-trim-build',
+            'runtime-libuv-poll-clear-trim-build',
+            'runtime-libuv-poll-clear-trim-compare',
+            'runtime-libuv-native-trim-compare',
+            'runtime-coff-lib-preflight',
+            'runtime-coff-neutral-preflight',
+            'runtime-libuv-poll-clear-build',
+            'runtime-libuv-poll-clear-compare',
+            'runtime-libuv-poll-clear-calibration',
+            'runtime-libuv-poll-clear-performance',
+            'runtime-libuv-poll-clear-io',
+            'runtime-libuv-poll-clear-jit-aot',
+            'runtime-libuv-poll-clear-jit-native',
+            'runtime-libuv-poll-clear-jit-native-fixture',
+            'runtime-libuv-poll-clear-jit-native-core',
+            'runtime-libuv-poll-clear-jit-native-solid',
+            'runtime-libuv-noinline-compare',
+            'runtime-libuv-native-compare',
+            'runtime-libuv-native-calibration',
+            'runtime-libuv-native-performance',
+            'runtime-unwind-build',
+            'runtime-unwind-trace-compare',
+            'runtime-origin-trace-compare',
+            'runtime-slot-trace-compare',
+            'runtime-slot-stack-compare',
+            'runtime-full-trace-compare',
+            'runtime-trace-compare',
+            'runtime-strong-compare',
+            'runtime-strong-dev-compare',
+          ]
+        default: 'none'
+      runtime-build-run:
+        description: Successful runtime-build run ID for the paired diagnostic
+        default: ''
       trials:
         description: Measured timed trials per artifact (3 to 30)
         default: '5'
@@ -47,13 +123,2072 @@ permissions:
   contents: read
 
 concurrency:
-  group: benchmark-comparison-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: benchmark-comparison-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic != 'none' && format('-{0}', inputs.retention-diagnostic) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  windows-runtime-link-inspect:
+    name: Inspect retained Windows runtime linker inputs
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-link-inspect' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install verified LLVM 23.1.1
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'llvm-23.1.1.msi'
+          Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-win64.msi' -OutFile $installer
+          if ((Get-FileHash -Algorithm SHA256 $installer).Hash -ne '11af43ba261a1158090dd6f0da40d7a34f32dbfb4a76b43240bffa1ebb140984') { throw 'LLVM installer digest mismatch' }
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', $installer, '/qn', '/norestart') -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "LLVM installer failed: $($install.ExitCode)" }
+      - name: Inspect the retained failed-build objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -notmatch '^[0-9]+$') { throw 'runtime-build-run must be a numeric run ID' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headBranch,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'failure' -or $run.event -ne 'workflow_dispatch' -or $run.headBranch -ne $env:GITHUB_REF_NAME -or $run.workflowName -ne 'Benchmark comparison') { throw 'Expected a failed source-build dispatch from this branch' }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RUNTIME_BUILD_RUN/jobs" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or @($jobs.jobs | Where-Object { $_.name -eq 'Build pinned Windows runtime from source' -and $_.conclusion -eq 'failure' }).Count -ne 1) { throw 'Expected exactly one failed source-build job' }
+          $root = Join-Path $env:RUNNER_TEMP 'runtime-link-inspection'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'source-run.json')
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-uninstrumented-source-runtime --dir (Join-Path $root 'inputs')
+          if ($LASTEXITCODE -ne 0) { throw 'Failed-build artifact download failed' }
+          foreach ($name in @('RunLoopBun.cpp.obj', 'UnifiedSource-runtime-28.cpp.obj')) {
+            $object = @(Get-ChildItem (Join-Path $root 'inputs') -File -Recurse -Filter $name)
+            if ($object.Count -ne 1) { throw "Expected one $name" }
+            Get-FileHash -Algorithm SHA256 $object[0].FullName | Format-List | Out-File (Join-Path $root "$name.hash.txt")
+            & 'C:\Program Files\LLVM\bin\llvm-nm.exe' --format=posix $object[0].FullName > (Join-Path $root "$name.symbols.txt")
+            if ($LASTEXITCODE -ne 0) { throw "Symbol inspection failed: $name" }
+            & 'C:\Program Files\LLVM\bin\clang.exe' -S -emit-llvm -x ir $object[0].FullName -o (Join-Path $root "$name.ll")
+            if ($LASTEXITCODE -ne 0) { throw "Bitcode inspection failed: $name" }
+            Select-String -Path (Join-Path $root "$name.ll") -Pattern 'WTFTimer__update' | Out-File (Join-Path $root "$name.timer.txt")
+          }
+      - name: Retain inspection and input identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-runtime-link-inspection
+          path: |
+            ${{ runner.temp }}/runtime-link-inspection/
+            !${{ runner.temp }}/runtime-link-inspection/**/*.ll
+            !${{ runner.temp }}/runtime-link-inspection/inputs/**/*.obj
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-link-control:
+    name: Windows weak timer symbol link control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-link-control' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install verified LLVM 23.1.1
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'llvm-23.1.1.msi'
+          Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-win64.msi' -OutFile $installer
+          if ((Get-FileHash -Algorithm SHA256 $installer).Hash -ne '11af43ba261a1158090dd6f0da40d7a34f32dbfb4a76b43240bffa1ebb140984') { throw 'LLVM installer digest mismatch' }
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', $installer, '/qn', '/norestart') -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "LLVM installer failed: $($install.ExitCode)" }
+      - name: Install the source-build Rust toolchain
+        run: |
+          rustup toolchain install nightly-2026-09-15 --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain install failed' }
+      - name: Compare weak and strong imports with and without ThinLTO
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-09-15
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'runtime-link-control'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          ./benchmarks/retention/windows-weak-link.ps1 -Output $root -LlvmBin 'C:\Program Files\LLVM\bin'
+      - name: Retain every compiler and linker outcome
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-runtime-link-control
+          path: ${{ runner.temp }}/runtime-link-control/
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-compare:
+    name: Compare source-built and distributed Windows runtimes
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-compare", "runtime-force-compare", "runtime-strong-compare", "runtime-strong-dev-compare"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the source-build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -notmatch '^[0-9]+$') { throw 'runtime-build-run must be a numeric run ID' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headBranch,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.event -ne 'workflow_dispatch' -or $run.headBranch -ne $env:GITHUB_REF_NAME -or $run.workflowName -ne 'Benchmark comparison') { throw 'The source-build run is not a successful dispatch from this branch' }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RUNTIME_BUILD_RUN/jobs" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or @($jobs.jobs | Where-Object { $_.name -eq 'Build pinned Windows runtime from source' -and $_.conclusion -eq 'success' }).Count -ne 1) { throw 'The source-build job did not succeed' }
+          $root = Join-Path $env:RUNNER_TEMP 'runtime-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'source-run.json')
+          $artifactName = if ($env:RETENTION_DIAGNOSTIC -in @('runtime-strong-compare', 'runtime-strong-dev-compare')) { 'windows-strong-timer-diagnostic' } elseif ($env:RETENTION_DIAGNOSTIC -eq 'runtime-force-compare') { 'windows-forced-timer-source-runtime' } else { 'windows-uninstrumented-source-runtime' }
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name $artifactName --dir (Join-Path $root 'source-artifact')
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime artifact download failed' }
+          $runtime = @(Get-ChildItem (Join-Path $root 'source-artifact') -Filter bun.exe -File -Recurse)
+          $manifest = @(Get-ChildItem (Join-Path $root 'source-artifact') -Filter runtime-build-adjustments.json -File -Recurse)
+          if ($runtime.Count -ne 1 -or $manifest.Count -ne 1) { throw 'Runtime artifact must contain exactly one binary and adjustment manifest' }
+          $adjustments = Get-Content -Raw -LiteralPath $manifest[0].FullName | ConvertFrom-Json
+          $sourceAdjustment = $adjustments.'webkit/Source/WTF/wtf/bun/RunLoopBun.cpp'
+          $upstreamBuildKey = @('scripts', 'build', 'bun.ts') -join '/'
+          $timerAdjustment = $adjustments.$upstreamBuildKey
+          if ($env:RETENTION_DIAGNOSTIC -in @('runtime-strong-compare', 'runtime-strong-dev-compare')) {
+            if (!$sourceAdjustment -or $sourceAdjustment.originalSha256 -ne '9053c4e134bb758077975c58168f003ad51ffc1cf5287f0f627f9e52abb60378' -or $sourceAdjustment.adjustedSha256 -ne 'e081b917bdeaf5ad3facba1b973997ce1e70051d014abd69def12f4ae896610f' -or $timerAdjustment) { throw 'Unexpected strong-timer diagnostic identity' }
+          } elseif ($sourceAdjustment) { throw 'Comparison refuses a runtime-source diagnostic build' }
+          if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-force-compare') {
+            if (!$timerAdjustment -or $timerAdjustment.originalSha256 -ne '1e12ec96773620eabda30ac1833509128d814905ee99f8bbf5c66cac4d36a8f9' -or $timerAdjustment.adjustedSha256 -ne '984e32a75d042e4711b2a83dac96598202465fded9542766e69d4ab6218ba3b8') { throw 'Unexpected forced-timer build identity' }
+          } elseif ($timerAdjustment) { throw 'Unforced comparison refuses a forced-timer build' }
+          "SOURCE_RUNTIME=$($runtime[0].FullName)" >> $env:GITHUB_ENV
+      - name: Run alternating headless runtime controls
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'runtime-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          $extra = @(if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-strong-dev-compare') { '--development-controls-only' })
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 @extra
+          if ($LASTEXITCODE -ne 0) { throw 'At least one paired runtime control was invalid' }
+      - name: Retain every control and source identity
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-runtime-comparison
+          path: |
+            ${{ runner.temp }}/runtime-comparison/
+            !${{ runner.temp }}/runtime-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-trace-compare:
+    name: Compare bounded collector traces on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-trace-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the pinned instrumented runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45305235060') { throw 'Unexpected trace build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '0724c4785975c3ab31bcecf54f9409185a542e55' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Trace runtime build identity or status did not match' }
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-collector-trace-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Trace runtime download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $manifests = @(Get-ChildItem (Join-Path $root 'runtime') -Filter collector-trace-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $manifests.Count -ne 1) { throw 'Expected one trace runtime and manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.headerSha256 -ne '18996262a48ecdffd789761c6283a9bcd2b55b955415f89bd44da041987054db' -or $manifest.originalSha256[0] -ne '22102e605c012f0134a35c1191f7f4ebb159836fcc8dd078103abcf5de26ff3f' -or $manifest.originalSha256[1] -ne '4d8bff93828c52d141a631f2c261a349b0c122b0aab81290262566d339ff901b' -or $manifest.originalSha256[2] -ne '691b8688cc95a88ae35832dd9b58b368914ad12c89ea8532977ea33e6226d45e') { throw 'Trace source identity did not match' }
+          if ($manifest.instrumentedSha256[0] -ne 'a2425a80c34d0029c127692ad67f29d7537071a2ab5e42082243e2546b6eda07' -or $manifest.instrumentedSha256[1] -ne '1e3b58a172768642faaa2997c754ce6cf6639d0fae20c807f28216ee213c97d5' -or $manifest.instrumentedSha256[2] -ne 'a0d8e2b25db1d2234f230fa6294ba4038190bf87b8a2471a1e08f1efbaf2fc80') { throw 'Trace instrumentation did not match the reviewed source' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare pinned and instrumented development runtimes
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime or trace control was invalid' }
+      - name: Retain controls and bounded traces
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-collector-trace-comparison
+          path: |
+            ${{ runner.temp }}/collector-trace-comparison/
+            !${{ runner.temp }}/collector-trace-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-runtime-full-trace-compare:
+    name: Compare full bounded collector traces on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-full-trace-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the pinned instrumented runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45316708468') { throw 'Unexpected trace build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne 'e9feebb8a4dedc2b83b207bedf9f863af998907c' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Trace runtime build identity or status did not match' }
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-full-collector-trace-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Trace runtime download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $manifests = @(Get-ChildItem (Join-Path $root 'runtime') -Filter collector-trace-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $manifests.Count -ne 1) { throw 'Expected one trace runtime and manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.headerSha256 -ne '18996262a48ecdffd789761c6283a9bcd2b55b955415f89bd44da041987054db' -or $manifest.originalSha256[0] -ne '22102e605c012f0134a35c1191f7f4ebb159836fcc8dd078103abcf5de26ff3f' -or $manifest.originalSha256[1] -ne '4d8bff93828c52d141a631f2c261a349b0c122b0aab81290262566d339ff901b' -or $manifest.originalSha256[2] -ne '691b8688cc95a88ae35832dd9b58b368914ad12c89ea8532977ea33e6226d45e') { throw 'Trace source identity did not match' }
+          if ($manifest.instrumentedSha256[0] -ne 'a2425a80c34d0029c127692ad67f29d7537071a2ab5e42082243e2546b6eda07' -or $manifest.instrumentedSha256[1] -ne 'ab43073e2cff7a684ed44c78656af077db836e1c0927f63b65406d940a7ce9f9' -or $manifest.instrumentedSha256[2] -ne 'a0d8e2b25db1d2234f230fa6294ba4038190bf87b8a2471a1e08f1efbaf2fc80') { throw 'Trace instrumentation did not match the reviewed source' }
+          if (($manifest.eventKinds -join ',') -ne '1,2,3') { throw 'Expected normal-edge collector instrumentation' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare pinned and instrumented development runtimes
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace --collector-normal-edges
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime or trace control was invalid' }
+      - name: Retain controls and bounded traces
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-full-collector-trace-comparison
+          path: |
+            ${{ runner.temp }}/collector-trace-comparison/
+            !${{ runner.temp }}/collector-trace-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-runtime-slot-trace-compare:
+    name: Compare conservative scan slots on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-slot-trace-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the pinned instrumented runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45326501970') { throw 'Unexpected trace build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '9202fbf70c659f88f7172eec4d2ef6ea8d6bd7e6' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Trace runtime build identity or status did not match' }
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-slot-collector-trace-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Trace runtime download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $manifests = @(Get-ChildItem (Join-Path $root 'runtime') -Filter collector-trace-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $manifests.Count -ne 1) { throw 'Expected one trace runtime and manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.headerSha256 -ne '18996262a48ecdffd789761c6283a9bcd2b55b955415f89bd44da041987054db' -or $manifest.originalSha256[0] -ne '22102e605c012f0134a35c1191f7f4ebb159836fcc8dd078103abcf5de26ff3f' -or $manifest.originalSha256[1] -ne '4d8bff93828c52d141a631f2c261a349b0c122b0aab81290262566d339ff901b' -or $manifest.originalSha256[2] -ne '691b8688cc95a88ae35832dd9b58b368914ad12c89ea8532977ea33e6226d45e') { throw 'Trace source identity did not match' }
+          if ($manifest.instrumentedSha256[0] -ne 'f24314f568f9b94afb00b45f230e992b98f6def7fc5878f1b4998b44f2be62c7' -or $manifest.instrumentedSha256[1] -ne 'ab43073e2cff7a684ed44c78656af077db836e1c0927f63b65406d940a7ce9f9' -or $manifest.instrumentedSha256[2] -ne 'a0d8e2b25db1d2234f230fa6294ba4038190bf87b8a2471a1e08f1efbaf2fc80') { throw 'Trace instrumentation did not match the reviewed source' }
+          if (($manifest.eventKinds -join ',') -ne '1,2,3,4,5') { throw 'Expected normal-edge collector instrumentation' }
+          if ($manifest.conservativeHeaderSha256 -ne '54e6ffb065b6859bda36ce66305da5aefbbc91bdde6ff60aef57c184ea675e16') { throw 'Unexpected conservative scanner declaration' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare pinned and instrumented development runtimes
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace --collector-normal-edges --collector-scan-slots
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime or trace control was invalid' }
+      - name: Retain controls and bounded traces
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-slot-collector-trace-comparison
+          path: |
+            ${{ runner.temp }}/collector-trace-comparison/
+            !${{ runner.temp }}/collector-trace-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-runtime-slot-stack-compare:
+    name: Compare scanned slots with thread stack bounds on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-slot-stack-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the pinned instrumented runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45326501970') { throw 'Unexpected trace build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '9202fbf70c659f88f7172eec4d2ef6ea8d6bd7e6' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Trace runtime build identity or status did not match' }
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-slot-collector-trace-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Trace runtime download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $manifests = @(Get-ChildItem (Join-Path $root 'runtime') -Filter collector-trace-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $manifests.Count -ne 1) { throw 'Expected one trace runtime and manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.headerSha256 -ne '18996262a48ecdffd789761c6283a9bcd2b55b955415f89bd44da041987054db' -or $manifest.originalSha256[0] -ne '22102e605c012f0134a35c1191f7f4ebb159836fcc8dd078103abcf5de26ff3f' -or $manifest.originalSha256[1] -ne '4d8bff93828c52d141a631f2c261a349b0c122b0aab81290262566d339ff901b' -or $manifest.originalSha256[2] -ne '691b8688cc95a88ae35832dd9b58b368914ad12c89ea8532977ea33e6226d45e') { throw 'Trace source identity did not match' }
+          if ($manifest.instrumentedSha256[0] -ne 'f24314f568f9b94afb00b45f230e992b98f6def7fc5878f1b4998b44f2be62c7' -or $manifest.instrumentedSha256[1] -ne 'ab43073e2cff7a684ed44c78656af077db836e1c0927f63b65406d940a7ce9f9' -or $manifest.instrumentedSha256[2] -ne 'a0d8e2b25db1d2234f230fa6294ba4038190bf87b8a2471a1e08f1efbaf2fc80') { throw 'Trace instrumentation did not match the reviewed source' }
+          if (($manifest.eventKinds -join ',') -ne '1,2,3,4,5') { throw 'Expected normal-edge collector instrumentation' }
+          if ($manifest.conservativeHeaderSha256 -ne '54e6ffb065b6859bda36ce66305da5aefbbc91bdde6ff60aef57c184ea675e16') { throw 'Unexpected conservative scanner declaration' }
+          if ((Get-FileHash -Algorithm SHA256 'benchmarks/retention/windows-stack-limits.ts').Hash.ToLowerInvariant() -ne '892c4074974a49e8f675ffa1a0e99752f21c4d06c6950033ceb03c6427f898e5') { throw 'Unexpected stack-bounds preload' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare pinned and instrumented development runtimes
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace --collector-normal-edges --collector-scan-slots --collector-stack-limits
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime or trace control was invalid' }
+      - name: Retain controls and bounded traces
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-slot-stack-comparison
+          path: |
+            ${{ runner.temp }}/collector-trace-comparison/
+            !${{ runner.temp }}/collector-trace-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-runtime-origin-trace-compare:
+    name: Compare conservative scan origins on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-origin-trace-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the pinned instrumented runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45336592879') { throw 'Unexpected trace build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '2bd75b0b67745f0c61e7d3c34349134875f3c68b' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Trace runtime build identity or status did not match' }
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-origin-collector-trace-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Trace runtime download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $manifests = @(Get-ChildItem (Join-Path $root 'runtime') -Filter collector-trace-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $manifests.Count -ne 1) { throw 'Expected one trace runtime and manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.headerSha256 -ne '18996262a48ecdffd789761c6283a9bcd2b55b955415f89bd44da041987054db' -or $manifest.originalSha256[0] -ne '22102e605c012f0134a35c1191f7f4ebb159836fcc8dd078103abcf5de26ff3f' -or $manifest.originalSha256[1] -ne '4d8bff93828c52d141a631f2c261a349b0c122b0aab81290262566d339ff901b' -or $manifest.originalSha256[2] -ne '691b8688cc95a88ae35832dd9b58b368914ad12c89ea8532977ea33e6226d45e') { throw 'Trace source identity did not match' }
+          if ($manifest.instrumentedSha256[0] -ne 'f24314f568f9b94afb00b45f230e992b98f6def7fc5878f1b4998b44f2be62c7' -or $manifest.instrumentedSha256[1] -ne 'ab43073e2cff7a684ed44c78656af077db836e1c0927f63b65406d940a7ce9f9' -or $manifest.instrumentedSha256[2] -ne 'a0d8e2b25db1d2234f230fa6294ba4038190bf87b8a2471a1e08f1efbaf2fc80') { throw 'Trace instrumentation did not match the reviewed source' }
+          if (($manifest.eventKinds -join ',') -ne '1,2,3,4,5,6,7,8') { throw 'Expected normal-edge collector instrumentation' }
+          if ($manifest.conservativeHeaderSha256 -ne '54e6ffb065b6859bda36ce66305da5aefbbc91bdde6ff60aef57c184ea675e16') { throw 'Unexpected conservative scanner declaration' }
+          if ($manifest.machineStackSha256 -ne '52bc4c9e4d1fa58730a19b8370cadbedf728e812a444a36f1a2e1cf685021641') { throw 'Unexpected machine scanner instrumentation' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare pinned and instrumented development runtimes
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace --collector-normal-edges --collector-scan-slots --collector-scan-origins
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime or trace control was invalid' }
+      - name: Retain controls and bounded traces
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-origin-collector-trace-comparison
+          path: |
+            ${{ runner.temp }}/collector-trace-comparison/
+            !${{ runner.temp }}/collector-trace-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-runtime-clear-trace-compare:
+    name: Compare conservative slots with clear bounds on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-clear-trace-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the pinned instrumented runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45347442752') { throw 'Unexpected trace build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '1df66f772049a543b6396fadcf9e8d7933330a57' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Trace runtime build identity or status did not match' }
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-clear-collector-trace-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Trace runtime download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $manifests = @(Get-ChildItem (Join-Path $root 'runtime') -Filter collector-trace-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $manifests.Count -ne 1) { throw 'Expected one trace runtime and manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.headerSha256 -ne '18996262a48ecdffd789761c6283a9bcd2b55b955415f89bd44da041987054db' -or $manifest.originalSha256[0] -ne '22102e605c012f0134a35c1191f7f4ebb159836fcc8dd078103abcf5de26ff3f' -or $manifest.originalSha256[1] -ne '4d8bff93828c52d141a631f2c261a349b0c122b0aab81290262566d339ff901b' -or $manifest.originalSha256[2] -ne '691b8688cc95a88ae35832dd9b58b368914ad12c89ea8532977ea33e6226d45e') { throw 'Trace source identity did not match' }
+          if ($manifest.instrumentedSha256[0] -ne 'f24314f568f9b94afb00b45f230e992b98f6def7fc5878f1b4998b44f2be62c7' -or $manifest.instrumentedSha256[1] -ne 'ab43073e2cff7a684ed44c78656af077db836e1c0927f63b65406d940a7ce9f9' -or $manifest.instrumentedSha256[2] -ne 'c4c531ea82017f58c2c58bdfeb4793358be93ed510316a2301d4f81dd09676c0') { throw 'Trace instrumentation did not match the reviewed source' }
+          if (($manifest.eventKinds -join ',') -ne '1,2,3,4,5,6,7,8,9,10') { throw 'Expected normal-edge collector instrumentation' }
+          if ($manifest.conservativeHeaderSha256 -ne '54e6ffb065b6859bda36ce66305da5aefbbc91bdde6ff60aef57c184ea675e16') { throw 'Unexpected conservative scanner declaration' }
+          if ($manifest.machineStackSha256 -ne '52bc4c9e4d1fa58730a19b8370cadbedf728e812a444a36f1a2e1cf685021641') { throw 'Unexpected machine scanner instrumentation' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare pinned and instrumented development runtimes
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace --collector-normal-edges --collector-scan-slots --collector-scan-origins --collector-clear-bounds
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime or trace control was invalid' }
+      - name: Retain controls and bounded traces
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-clear-collector-trace-comparison
+          path: |
+            ${{ runner.temp }}/collector-trace-comparison/
+            !${{ runner.temp }}/collector-trace-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-runtime-unwind-trace-compare:
+    name: Compare conservative slots with unwind frames on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-unwind-trace-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the pinned instrumented runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45359463745') { throw 'Unexpected trace build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '32255be0038c44fa917a4e36ac3f1c9ed72b3e3a' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Trace runtime build identity or status did not match' }
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-unwind-collector-trace-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Trace runtime download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $manifests = @(Get-ChildItem (Join-Path $root 'runtime') -Filter collector-trace-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $manifests.Count -ne 1) { throw 'Expected one trace runtime and manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.headerSha256 -ne '18996262a48ecdffd789761c6283a9bcd2b55b955415f89bd44da041987054db' -or $manifest.originalSha256[0] -ne '22102e605c012f0134a35c1191f7f4ebb159836fcc8dd078103abcf5de26ff3f' -or $manifest.originalSha256[1] -ne '4d8bff93828c52d141a631f2c261a349b0c122b0aab81290262566d339ff901b' -or $manifest.originalSha256[2] -ne '691b8688cc95a88ae35832dd9b58b368914ad12c89ea8532977ea33e6226d45e') { throw 'Trace source identity did not match' }
+          if ($manifest.instrumentedSha256[0] -ne 'f24314f568f9b94afb00b45f230e992b98f6def7fc5878f1b4998b44f2be62c7' -or $manifest.instrumentedSha256[1] -ne 'ab43073e2cff7a684ed44c78656af077db836e1c0927f63b65406d940a7ce9f9' -or $manifest.instrumentedSha256[2] -ne '18a447eea74c08c28444e90fb07d00234ee4e4e7ca7f99907c6c9edc2cbdcaa6') { throw 'Trace instrumentation did not match the reviewed source' }
+          if (($manifest.eventKinds -join ',') -ne '1,2,3,4,5,6,7,8,9,10,11,12,13') { throw 'Expected normal-edge collector instrumentation' }
+          if ($manifest.conservativeHeaderSha256 -ne '54e6ffb065b6859bda36ce66305da5aefbbc91bdde6ff60aef57c184ea675e16') { throw 'Unexpected conservative scanner declaration' }
+          if ($manifest.machineStackSha256 -ne '52bc4c9e4d1fa58730a19b8370cadbedf728e812a444a36f1a2e1cf685021641') { throw 'Unexpected machine scanner instrumentation' }
+          if ($manifest.unwindHeaderSha256 -ne '9bbc644309488828aec4c12cfde797f9c867b3c6ea75d5aedb4ad29387668bec') { throw 'Unexpected unwind tracer' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare pinned and instrumented development runtimes
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace --collector-normal-edges --collector-scan-slots --collector-scan-origins --collector-clear-bounds --collector-unwind --collector-stack-limits
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime or trace control was invalid' }
+      - name: Retain controls and bounded traces
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-unwind-collector-trace-comparison
+          path: |
+            ${{ runner.temp }}/collector-trace-comparison/
+            !${{ runner.temp }}/collector-trace-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-runtime-libuv-noinline-compare:
+    name: Compare libuv poll stack layout on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-noinline-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45374563413') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45374563413'; head = 'aaed3492f9edf0926baa766c855e4254cf0073ef'; artifact = 'windows-libuv-noinline-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '379c7a1859166bd415e28f97412b4e5b0fab221bb438e40e8bd5c17b6698cce8' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'cf5598296da736c817c4321f007c11d76ebe6212442d34d2b124bc02ba4c9a7c') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Run alternating development controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $reference = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --aot-reference $reference
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime control was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-noinline-comparison
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-libuv-native-compare:
+    name: Compare libuv poll layout with a native Windows host
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-libuv-native-compare", "runtime-libuv-native-calibration", "runtime-libuv-native-performance"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          release-target: 'true'
+          remap-cargo-home: 'true'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45374563413') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45374563413'; head = 'aaed3492f9edf0926baa766c855e4254cf0073ef'; artifact = 'windows-libuv-noinline-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '379c7a1859166bd415e28f97412b4e5b0fab221bb438e40e8bd5c17b6698cce8' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'cf5598296da736c817c4321f007c11d76ebe6212442d34d2b124bc02ba4c9a7c') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Build the real native host and unchanged React module
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem -Directory $sdk | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (!$fxc) { throw 'Windows SDK fxc.exe unavailable' }
+          $env:GPUI_FXC_PATH = $fxc
+          cargo build --locked --release -p bun-native-host
+          if ($LASTEXITCODE -ne 0) { throw 'Native host build failed' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $env:CONTROL_OUT = Join-Path $root 'bundle'
+          bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"react",entry:"benchmarks/solid/react.tsx",outdir:process.env.CONTROL_OUT,cwd:process.cwd()})'
+          if ($LASTEXITCODE -ne 0) { throw 'React module bundle failed' }
+      - name: Qualify native paint before timing
+        if: inputs.retention-diagnostic == 'runtime-libuv-native-performance'
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'native-calibration') --calibration
+          if ($LASTEXITCODE -ne 0) { throw 'Native paint or ownership calibration was invalid' }
+      - name: Run alternating native development controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $extra = @(if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-native-calibration') { '--calibration' } elseif ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-native-performance') { '--performance' })
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'native-pairs') @extra
+          if ($LASTEXITCODE -ne 0) { throw 'At least one native workload was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-native-comparison
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-libuv-poll-clear-compare:
+    name: Compare libuv poll buffer clearing on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-poll-clear-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45392902254') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45392902254'; head = '3aa26c7fc1c2bd17d0e9edc84074adb36c5d34ce'; artifact = 'windows-libuv-poll-clear-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.mode -ne 'clear' -or $manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Run alternating development controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $reference = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --aot-reference $reference
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime control was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-poll-clear-comparison
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-libuv-poll-clear-jit-aot:
+    name: Compare JIT-present AOT buffer controls on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-poll-clear-jit-aot' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45392902254') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45392902254'; head = '3aa26c7fc1c2bd17d0e9edc84074adb36c5d34ce'; artifact = 'windows-libuv-poll-clear-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.mode -ne 'clear' -or $manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Run alternating JIT-present AOT and development controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --aot-jit-present
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime control was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-poll-clear-jit-aot
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-libuv-poll-clear-io:
+    name: Measure loopback I/O with libuv poll buffer clearing
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-poll-clear-io' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45392902254') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45392902254'; head = '3aa26c7fc1c2bd17d0e9edc84074adb36c5d34ce'; artifact = 'windows-libuv-poll-clear-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.mode -ne 'clear' -or $manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Run alternating loopback I/O controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          python benchmarks/retention/poll-io-pairs.py $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'io-pairs')
+          if ($LASTEXITCODE -ne 0) { throw 'At least one loopback control was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-poll-clear-io
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-libuv-poll-clear-native:
+    name: Compare libuv poll buffer clearing with a native Windows host
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-libuv-poll-clear-calibration", "runtime-libuv-poll-clear-performance"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          release-target: 'true'
+          remap-cargo-home: 'true'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45392902254') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45392902254'; head = '3aa26c7fc1c2bd17d0e9edc84074adb36c5d34ce'; artifact = 'windows-libuv-poll-clear-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.mode -ne 'clear' -or $manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Build the real native host and unchanged React module
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem -Directory $sdk | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (!$fxc) { throw 'Windows SDK fxc.exe unavailable' }
+          $env:GPUI_FXC_PATH = $fxc
+          cargo build --locked --release -p bun-native-host
+          if ($LASTEXITCODE -ne 0) { throw 'Native host build failed' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $env:CONTROL_OUT = Join-Path $root 'bundle'
+          bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"react",entry:"benchmarks/solid/react.tsx",outdir:process.env.CONTROL_OUT,cwd:process.cwd()})'
+          if ($LASTEXITCODE -ne 0) { throw 'React module bundle failed' }
+      - name: Qualify native paint before timing
+        if: inputs.retention-diagnostic == 'runtime-libuv-poll-clear-performance'
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'native-calibration') --calibration
+          if ($LASTEXITCODE -ne 0) { throw 'Native paint or ownership calibration was invalid' }
+      - name: Run alternating native development controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $extra = @(if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-poll-clear-calibration') { '--calibration' } elseif ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-poll-clear-performance') { '--performance' })
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'native-pairs') @extra
+          if ($LASTEXITCODE -ne 0) { throw 'At least one native workload was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-poll-clear-native-comparison
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-libuv-poll-clear-jit-native:
+    name: Compare JIT-present AOT with a native Windows host
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-poll-clear-jit-native' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          release-target: 'true'
+          remap-cargo-home: 'true'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45392902254') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45392902254'; head = '3aa26c7fc1c2bd17d0e9edc84074adb36c5d34ce'; artifact = 'windows-libuv-poll-clear-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.mode -ne 'clear' -or $manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Build the real native host and unchanged React module
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem -Directory $sdk | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (!$fxc) { throw 'Windows SDK fxc.exe unavailable' }
+          $env:GPUI_FXC_PATH = $fxc
+          cargo build --locked --release -p bun-native-host
+          if ($LASTEXITCODE -ne 0) { throw 'Native host build failed' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $env:CONTROL_OUT = Join-Path $root 'bundle'
+          bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"react",entry:"benchmarks/solid/react.tsx",outdir:process.env.CONTROL_OUT,cwd:process.cwd()})'
+          if ($LASTEXITCODE -ne 0) { throw 'React module bundle failed' }
+      - name: Compile and inspect JIT-present AOT applications
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $module = Join-Path $root 'bundle/application.js'
+          $inspect = 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); console.log(JSON.stringify({graph,runtime},null,2)); if (!graph.hasCompiledProgram || runtime.jit !== "present") throw new Error("Expected compiled program with JIT present")'
+          foreach ($entry in @(@{name='baseline'; runtime=$env:BASELINE_RUNTIME}, @{name='candidate'; runtime=$env:SOURCE_RUNTIME})) {
+            $app = Join-Path $root "$($entry.name)-jit-aot.exe"
+            & $entry.runtime --no-install compile --no-script --production --explain=json $module --outfile $app *> (Join-Path $root "$($entry.name)-compile.log")
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic AOT compilation failed' }
+            bun -e $inspect $app *> (Join-Path $root "$($entry.name)-inspection.json")
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic AOT inspection failed' }
+            Get-FileHash -Algorithm SHA256 $app | ConvertTo-Json | Set-Content (Join-Path $root "$($entry.name)-application-hash.json")
+          }
+      - name: Compare native paint calibration and 100-mount AOT workloads
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $baseline = Join-Path $root 'baseline-jit-aot.exe'
+          $candidate = Join-Path $root 'candidate-jit-aot.exe'
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-calibration') --aot-jit-present-calibration
+          if ($LASTEXITCODE -ne 0) { throw 'JIT-present native paint calibration was invalid' }
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-pairs') --aot-jit-present
+          if ($LASTEXITCODE -ne 0) { throw 'JIT-present native workload was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-poll-clear-jit-native
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-libuv-poll-clear-jit-native-adapter:
+    name: Compare Core or Solid JIT-present native AOT
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-libuv-poll-clear-jit-native-core", "runtime-libuv-poll-clear-jit-native-solid"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CONTROL_ADAPTER: ${{ inputs.retention-diagnostic == 'runtime-libuv-poll-clear-jit-native-core' && 'core' || 'solid' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          release-target: 'true'
+          remap-cargo-home: 'true'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45392902254') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45392902254'; head = '3aa26c7fc1c2bd17d0e9edc84074adb36c5d34ce'; artifact = 'windows-libuv-poll-clear-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.mode -ne 'clear' -or $manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Build the real native host and unchanged adapter module
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem -Directory $sdk | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (!$fxc) { throw 'Windows SDK fxc.exe unavailable' }
+          $env:GPUI_FXC_PATH = $fxc
+          cargo build --locked --release -p bun-native-host
+          if ($LASTEXITCODE -ne 0) { throw 'Native host build failed' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $env:CONTROL_OUT = Join-Path $root 'bundle'
+          bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; const entry=process.env.CONTROL_ADAPTER === "core" ? "benchmarks/solid/direct.ts" : "benchmarks/solid/reactive.tsx"; await bundleApplication({framework:"solid",entry,outdir:process.env.CONTROL_OUT,cwd:process.cwd()})'
+          if ($LASTEXITCODE -ne 0) { throw 'React module bundle failed' }
+      - name: Compile and inspect JIT-present AOT applications
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $module = Join-Path $root 'bundle/application.js'
+          $inspect = 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); console.log(JSON.stringify({graph,runtime},null,2)); if (!graph.hasCompiledProgram || runtime.jit !== "present") throw new Error("Expected compiled program with JIT present")'
+          foreach ($entry in @(@{name='baseline'; runtime=$env:BASELINE_RUNTIME}, @{name='candidate'; runtime=$env:SOURCE_RUNTIME})) {
+            $app = Join-Path $root "$($entry.name)-jit-aot.exe"
+            & $entry.runtime --no-install compile --no-script --production --explain=json $module --outfile $app *> (Join-Path $root "$($entry.name)-compile.log")
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic AOT compilation failed' }
+            bun -e $inspect $app *> (Join-Path $root "$($entry.name)-inspection.json")
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic AOT inspection failed' }
+            Get-FileHash -Algorithm SHA256 $app | ConvertTo-Json | Set-Content (Join-Path $root "$($entry.name)-application-hash.json")
+          }
+      - name: Compare native paint calibration and 100-mount AOT workloads
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $baseline = Join-Path $root 'baseline-jit-aot.exe'
+          $candidate = Join-Path $root 'candidate-jit-aot.exe'
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-calibration') --aot-jit-present-calibration "--adapter=$env:CONTROL_ADAPTER"
+          if ($LASTEXITCODE -ne 0) { throw 'JIT-present native paint calibration was invalid' }
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-pairs') --aot-jit-present-extended "--adapter=$env:CONTROL_ADAPTER"
+          if ($LASTEXITCODE -ne 0) { throw 'JIT-present native workload was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-poll-clear-jit-native-adapter
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-libuv-poll-clear-jit-native-fixture:
+    name: Compare fixture cleanup and buffer clearing in native JIT-present AOT
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-poll-clear-jit-native-fixture' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          release-target: 'true'
+          remap-cargo-home: 'true'
+      - name: Test native comparison safeguards
+        run: |
+          python -m unittest tests.quality.test_native_runtime_pairs
+          if ($LASTEXITCODE -ne 0) { throw 'Native comparison safeguards failed' }
+      - name: Verify and download both pinned source builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45392902254') { throw 'Unexpected candidate build run' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $builds = @(
+            @{ id = '45202470176'; head = '11f830777e47745ef5053a7cf2f257a2de984f24'; artifact = 'windows-strong-timer-diagnostic'; label = 'baseline' },
+            @{ id = '45392902254'; head = '3aa26c7fc1c2bd17d0e9edc84074adb36c5d34ce'; artifact = 'windows-libuv-poll-clear-runtime'; label = 'candidate' }
+          )
+          foreach ($build in $builds) {
+            $run = gh run view $build.id --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne $build.head -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw "Unexpected $($build.label) build identity" }
+            $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root "$($build.label)-run.json")
+            gh run download $build.id --repo $env:GITHUB_REPOSITORY --name $build.artifact --dir (Join-Path $root $build.label)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to download $($build.label) runtime" }
+            $binary = @(Get-ChildItem (Join-Path $root $build.label) -Filter bun.exe -File -Recurse)
+            $adjustment = @(Get-ChildItem (Join-Path $root $build.label) -Filter runtime-build-adjustments.json -File -Recurse)
+            if ($binary.Count -ne 1 -or $adjustment.Count -ne 1) { throw 'Expected exactly one binary and adjustment manifest' }
+            $build.binary = $binary[0].FullName
+            $build.adjustment = Get-Content -Raw -LiteralPath $adjustment[0].FullName | ConvertFrom-Json
+          }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash.ToLowerInvariant() -ne '693f0798d0e504ff79ba0c85ddfdff75d8cb4b2b24b802f61b4f847e86c71146') { throw 'Baseline binary identity mismatch' }
+          if (($builds[0].adjustment | ConvertTo-Json -Depth 10 -Compress) -ne ($builds[1].adjustment | ConvertTo-Json -Depth 10 -Compress)) { throw 'Other source-build adjustments differ' }
+          $manifests = @(Get-ChildItem (Join-Path $root 'candidate') -Filter libuv-poll-adjustments.json -File -Recurse)
+          if ($manifests.Count -ne 1) { throw 'Expected one libuv adjustment manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.mode -ne 'clear' -or $manifest.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $manifest.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $manifest.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $manifest.libuvCoreOriginalSha256 -ne 'cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be' -or $manifest.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95') { throw 'Libuv control identity mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
+          "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
+          "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
+      - name: Install source-pinned fixture cleanup control
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'native-fixture-control'
+          New-Item -ItemType Directory $fixture | Out-Null
+          python benchmarks/retention/prepare-native-fixture.py $fixture safe-clear
+          if ($LASTEXITCODE -ne 0) { throw 'Fixture cleanup control preparation failed' }
+      - name: Build the real native host and diagnostic React module
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem -Directory $sdk | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending | ForEach-Object { Join-Path $_.FullName 'x64/fxc.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (!$fxc) { throw 'Windows SDK fxc.exe unavailable' }
+          $env:GPUI_FXC_PATH = $fxc
+          cargo build --locked --release -p bun-native-host
+          if ($LASTEXITCODE -ne 0) { throw 'Native host build failed' }
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $env:CONTROL_OUT = Join-Path $root 'bundle'
+          bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"react",entry:"benchmarks/solid/react.tsx",outdir:process.env.CONTROL_OUT,cwd:process.cwd()})'
+          if ($LASTEXITCODE -ne 0) { throw 'React module bundle failed' }
+      - name: Compile and inspect JIT-present AOT applications
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $module = Join-Path $root 'bundle/application.js'
+          $inspect = 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); console.log(JSON.stringify({graph,runtime},null,2)); if (!graph.hasCompiledProgram || runtime.jit !== "present") throw new Error("Expected compiled program with JIT present")'
+          foreach ($entry in @(@{name='baseline'; runtime=$env:BASELINE_RUNTIME}, @{name='candidate'; runtime=$env:SOURCE_RUNTIME})) {
+            $app = Join-Path $root "$($entry.name)-jit-aot.exe"
+            & $entry.runtime --no-install compile --no-script --production --explain=json $module --outfile $app *> (Join-Path $root "$($entry.name)-compile.log")
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic AOT compilation failed' }
+            bun -e $inspect $app *> (Join-Path $root "$($entry.name)-inspection.json")
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic AOT inspection failed' }
+            Get-FileHash -Algorithm SHA256 $app | ConvertTo-Json | Set-Content (Join-Path $root "$($entry.name)-application-hash.json")
+          }
+      - name: Compare native paint calibration and 100-mount AOT workloads
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
+          $baseline = Join-Path $root 'baseline-jit-aot.exe'
+          $candidate = Join-Path $root 'candidate-jit-aot.exe'
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-calibration') --aot-jit-present-calibration
+          if ($LASTEXITCODE -ne 0) { throw 'JIT-present native paint calibration was invalid' }
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-pairs') --aot-jit-present-extended
+          if ($LASTEXITCODE -ne 0) { throw 'JIT-present native workload was invalid' }
+      - name: Retain controls and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-libuv-poll-clear-jit-native-fixture
+          path: |
+            ${{ runner.temp }}/libuv-noinline-comparison/
+            ${{ runner.temp }}/native-fixture-control/
+            !${{ runner.temp }}/libuv-noinline-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Restore the original fixture
+        if: ${{ always() }}
+        run: |
+          $original = Join-Path $env:RUNNER_TEMP 'native-fixture-control/original-react.tsx.txt'
+          if (Test-Path -LiteralPath $original) {
+            Copy-Item -LiteralPath $original -Destination 'benchmarks/solid/react.tsx' -Force
+            if ((Get-FileHash -Algorithm SHA256 'benchmarks/solid/react.tsx').Hash.ToLowerInvariant() -ne 'ce636a55012d21d54cecc89ad0664d76d3ef9fc0a83211ca27bd301d350745a1') { throw 'Fixture restoration failed' }
+          }
+
+  windows-runtime-native-trim-compare:
+    name: Compare native-built trimmed AOT runtime on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-native-trim-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify the diagnostic trim build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45392332853') { throw 'Unexpected native trim build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '46fc311711bdfb253508680e0effe9d39fea9082' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected native trim build identity' }
+          $root = Join-Path $env:RUNNER_TEMP 'native-trim-comparison'
+          New-Item -ItemType Directory $root | Out-Null
+          $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'build-run.json')
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-libuv-native-trim-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Native trim artifact download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $trim = @(Get-ChildItem (Join-Path $root 'runtime') -Filter native-trim-adjustments.json -File -Recurse)
+          $poll = @(Get-ChildItem (Join-Path $root 'runtime') -Filter libuv-poll-adjustments.json -File -Recurse)
+          $build = @(Get-ChildItem (Join-Path $root 'runtime') -Filter runtime-build-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $trim.Count -ne 1 -or $poll.Count -ne 1 -or $build.Count -ne 1) { throw 'Expected one binary and three adjustment manifests' }
+          $t = Get-Content -Raw $trim[0].FullName | ConvertFrom-Json
+          $p = Get-Content -Raw $poll[0].FullName | ConvertFrom-Json
+          $b = Get-Content -Raw $build[0].FullName | ConvertFrom-Json
+          $timer = $b.'webkit/Source/WTF/wtf/bun/RunLoopBun.cpp'
+          if ($t.originalSha256 -ne '250214955aa10df16dbd06a9858948e8b1fb42e201e70f90af7408a605114826' -or $t.adjustedSha256 -ne '8a6357783e12211117f3bb784a197ce8e1e593ecc3b3a463888a5b6504f083b8' -or $p.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $p.bunLibuvSpecAdjustedSha256 -ne '379c7a1859166bd415e28f97412b4e5b0fab221bb438e40e8bd5c17b6698cce8' -or $p.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $p.diagnosticPatchSha256 -ne 'cf5598296da736c817c4321f007c11d76ebe6212442d34d2b124bc02ba4c9a7c' -or $timer.adjustedSha256 -ne 'e081b917bdeaf5ad3facba1b973997ce1e70051d014abd69def12f4ae896610f') { throw 'Native trim source identity mismatch' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare inspected development and AOT controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'native-trim-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $baseline = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $baseline $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime, AOT inspection, or retention control was invalid' }
+      - name: Retain inspections and all controls
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-native-trim-comparison
+          path: |
+            ${{ runner.temp }}/native-trim-comparison/
+            !${{ runner.temp }}/native-trim-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-clear-trim-compare:
+    name: Compare buffer-clearing trimmed AOT runtime on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-libuv-poll-clear-trim-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify the diagnostic trim build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45464029649') { throw 'Unexpected native trim build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne 'a8823e4d739e8efb8fb3efc8f4e4ae6020150d9e' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected native trim build identity' }
+          $root = Join-Path $env:RUNNER_TEMP 'native-trim-comparison'
+          New-Item -ItemType Directory $root | Out-Null
+          $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'build-run.json')
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-libuv-poll-clear-trim-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Native trim artifact download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $trim = @(Get-ChildItem (Join-Path $root 'runtime') -Filter native-trim-adjustments.json -File -Recurse)
+          $poll = @(Get-ChildItem (Join-Path $root 'runtime') -Filter libuv-poll-adjustments.json -File -Recurse)
+          $build = @(Get-ChildItem (Join-Path $root 'runtime') -Filter runtime-build-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $trim.Count -ne 1 -or $poll.Count -ne 1 -or $build.Count -ne 1) { throw 'Expected one binary and three adjustment manifests' }
+          $t = Get-Content -Raw $trim[0].FullName | ConvertFrom-Json
+          $p = Get-Content -Raw $poll[0].FullName | ConvertFrom-Json
+          $b = Get-Content -Raw $build[0].FullName | ConvertFrom-Json
+          $timer = $b.'webkit/Source/WTF/wtf/bun/RunLoopBun.cpp'
+          if ($p.mode -ne 'clear' -or $t.objectsOriginalSha256 -ne 'f911f5a3bd16e7fe0e1c86ec523f651483e342a103abc0f8fbcc2e20b6498619' -or $t.objectsAdjustedSha256 -ne 'e91137101fcd72ff651e1f5bebddfcc77a9f30c9fc7e9c09e92d12bb2067d1c6' -or $t.coffOriginalSha256 -ne '0c3456653c73da79e97ee9b3481ee0e280420ed0ed87960af3768d6af1e50052' -or $t.coffAdjustedSha256 -ne '7e0c4a3ffe0301d84104e841c3d1718ffaaa561524a71d279cce2194dea20ebd' -or $t.originalSha256 -ne '250214955aa10df16dbd06a9858948e8b1fb42e201e70f90af7408a605114826' -or $t.adjustedSha256 -ne '8a6357783e12211117f3bb784a197ce8e1e593ecc3b3a463888a5b6504f083b8' -or $p.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $p.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $p.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $p.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95' -or $timer.adjustedSha256 -ne 'e081b917bdeaf5ad3facba1b973997ce1e70051d014abd69def12f4ae896610f') { throw 'Native trim source identity mismatch' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare inspected development and AOT controls
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'native-trim-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $baseline = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $baseline $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime, AOT inspection, or retention control was invalid' }
+      - name: Retain inspections and all controls
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-poll-clear-trim-comparison
+          path: |
+            ${{ runner.temp }}/native-trim-comparison/
+            !${{ runner.temp }}/native-trim-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-coff-lib-preflight:
+    name: Reproduce native COFF library lookup
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-coff-lib-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          repository: oven-sh/bun
+          ref: b1007f1177fd402fae67387b8548cae5ae9b5707
+          path: bun-source
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Link a small real CRT-dependent Windows executable
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'coff-lib-preflight'
+          New-Item -ItemType Directory $root | Out-Null
+          "EVIDENCE=$root" >> $env:GITHUB_ENV
+          . (Join-Path $env:GITHUB_WORKSPACE 'bun-source/scripts/vs-shell.ps1')
+          $env:PATH = 'C:\Program Files\LLVM\bin;' + $env:PATH
+          Set-Location $root
+          @'
+          #include <stdio.h>
+          int main(void) { return puts("control") < 0; }
+          '@ | Set-Content -Encoding ascii control.c
+          clang-cl /nologo /MT /c control.c /Focontrol.obj
+          if ($LASTEXITCODE -ne 0) { throw 'CRT control compilation failed' }
+          clang-cl /nologo -fuse-ld=lld control.obj /Fecontrol.exe /link /machine:x64 /lldmap:control.lldmap /map:control.map
+          if ($LASTEXITCODE -ne 0) { throw 'CRT control link failed' }
+          & (Join-Path $root 'control.exe') *> control-output.log
+          if ($LASTEXITCODE -ne 0) { throw 'CRT control execution failed' }
+          Set-Location $env:GITHUB_WORKSPACE
+          bun benchmarks/retention/coff-lib-preflight.ts (Join-Path $env:GITHUB_WORKSPACE 'bun-source') $root (Join-Path $root 'results.json')
+          if ($LASTEXITCODE -ne 0) { throw 'CRT library lookup control did not reproduce' }
+      - name: Retain maps and comparison
+        if: ${{ always() && env.EVIDENCE != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-coff-lib-preflight
+          path: |
+            ${{ runner.temp }}/coff-lib-preflight/
+            !${{ runner.temp }}/coff-lib-preflight/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-coff-neutral-preflight:
+    name: Validate neutral COFF data graph
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-coff-neutral-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          repository: oven-sh/bun
+          ref: b1007f1177fd402fae67387b8548cae5ae9b5707
+          path: bun-source
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Link captured ICU data and compare graph readers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'coff-neutral-preflight'
+          New-Item -ItemType Directory $root | Out-Null
+          "EVIDENCE=$root" >> $env:GITHUB_ENV
+          $run = gh run view 45420316337 --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'failure' -or $run.headSha -ne 'ccd0b713b623e3ff43d331230f59b2fbf839b1b6' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected ICU capture run' }
+          gh run download 45420316337 --repo $env:GITHUB_REPOSITORY --name windows-libuv-poll-clear-trim-runtime --dir (Join-Path $root 'capture')
+          if ($LASTEXITCODE -ne 0) { throw 'ICU capture download failed' }
+          $object = @(Get-ChildItem (Join-Path $root 'capture') -Recurse -File -Filter icudt79l_dat.obj)
+          if ($object.Count -ne 1 -or (Get-FileHash $object[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ne '645a5c891c411d57f61f1aa46db22e01d589197b056bd5998ad8c457cd12eb0b') { throw 'ICU object identity mismatch' }
+          Copy-Item $object[0].FullName (Join-Path $root 'icu.obj')
+          Remove-Item -Recurse -Force (Join-Path $root 'capture')
+          . (Join-Path $env:GITHUB_WORKSPACE 'bun-source/scripts/vs-shell.ps1')
+          $env:PATH = 'C:\Program Files\LLVM\bin;' + $env:PATH
+          Set-Location $root
+          @'
+          #include <stdio.h>
+          extern const unsigned char icudt79_dat[];
+          int main(void) { printf("%u\n", (unsigned)icudt79_dat[0]); return 0; }
+          '@ | Set-Content -Encoding ascii control.c
+          clang-cl /nologo /MT /c control.c /Focontrol.obj
+          if ($LASTEXITCODE -ne 0) { throw 'ICU control compilation failed' }
+          clang-cl /nologo -fuse-ld=lld control.obj icu.obj /Fecontrol.exe /link /machine:x64 /lldmap:control.lldmap /map:control.map
+          if ($LASTEXITCODE -ne 0) { throw 'ICU control link failed' }
+          & (Join-Path $root 'control.exe') *> control-output.log
+          if ($LASTEXITCODE -ne 0) { throw 'ICU control execution failed' }
+          Set-Location $env:GITHUB_WORKSPACE
+          $source = Join-Path $env:GITHUB_WORKSPACE 'bun-source'
+          bun benchmarks/retention/coff-neutral-preflight.ts $source $root (Join-Path $root 'original.json') reject
+          if ($LASTEXITCODE -ne 0) { throw 'Original parser did not reproduce ICU failure' }
+          python benchmarks/retention/instrument-native-trim.py $source (Join-Path $env:RUNNER_TEMP 'native-trim-neutral.json') --native-lib --neutral-data
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned parser adjustment failed' }
+          bun benchmarks/retention/coff-neutral-preflight.ts $source $root (Join-Path $root 'adjusted.json') accept
+          if ($LASTEXITCODE -ne 0) { throw 'Adjusted parser did not accept ICU graph' }
+      - name: Retain maps and comparison
+        if: ${{ always() && env.EVIDENCE != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-coff-neutral-preflight
+          path: |
+            ${{ runner.temp }}/coff-neutral-preflight/
+            !${{ runner.temp }}/coff-neutral-preflight/*.exe
+            !${{ runner.temp }}/coff-neutral-preflight/icu.obj
+            ${{ runner.temp }}/native-trim-neutral.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-build:
+    name: Build pinned Windows runtime from source
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-build", "runtime-rust-symbols", "runtime-rust-relink", "runtime-force-build", "runtime-strong-build", "runtime-trace-build", "runtime-full-trace-build", "runtime-slot-trace-build", "runtime-origin-trace-build", "runtime-clear-trace-build", "runtime-unwind-build", "runtime-libuv-noinline-build", "runtime-libuv-native-trim-build", "runtime-libuv-poll-clear-build", "runtime-libuv-poll-clear-trim-build"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          repository: oven-sh/bun
+          ref: b1007f1177fd402fae67387b8548cae5ae9b5707
+          path: bun-source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          repository: oven-sh/WebKit
+          ref: 4d45755fed4aeef19e95beb90d3d0c884a2812bd
+          path: webkit-source
+          sparse-checkout: |
+            Source
+            Tools
+            icu
+          persist-credentials: false
+      - name: Test source-pinning safeguards
+        if: contains(fromJSON('["runtime-libuv-noinline-build", "runtime-libuv-native-trim-build", "runtime-libuv-poll-clear-build", "runtime-libuv-poll-clear-trim-build"]'), inputs.retention-diagnostic)
+        run: |
+          python -m unittest tests.quality.test_libuv_poll_controls
+          if ($LASTEXITCODE -ne 0) { throw 'Source-pinning safeguards failed' }
+      - name: Provision verified LLVM and native build tools
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'llvm-23.1.1.msi'
+          Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-win64.msi' -OutFile $installer
+          if ((Get-FileHash -Algorithm SHA256 $installer).Hash -ne '11af43ba261a1158090dd6f0da40d7a34f32dbfb4a76b43240bffa1ebb140984') { throw 'LLVM installer digest mismatch' }
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', $installer, '/qn', '/norestart', 'INSTALLDIR=C:\LLVM23') -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "LLVM installer failed: $($install.ExitCode)" }
+          choco install nasm cygwin --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Windows native tool provisioning failed' }
+          rustup toolchain install nightly-2026-09-15 --profile minimal --component rust-src --component llvm-tools
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain install failed' }
+      - name: Apply recorded upstream build-script adjustments
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
+        run: |
+          $adjustArgs = @((Join-Path $env:GITHUB_WORKSPACE 'bun-source'), (Join-Path $env:GITHUB_WORKSPACE 'webkit-source'), (Join-Path $env:RUNNER_TEMP 'runtime-build-adjustments.json'))
+          if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-force-build') { $adjustArgs += '--force-timer' }
+          if ($env:RETENTION_DIAGNOSTIC -in @('runtime-strong-build', 'runtime-trace-build', 'runtime-full-trace-build', 'runtime-slot-trace-build', 'runtime-origin-trace-build', 'runtime-clear-trace-build', 'runtime-unwind-build', 'runtime-libuv-noinline-build', 'runtime-libuv-native-trim-build', 'runtime-libuv-poll-clear-build', 'runtime-libuv-poll-clear-trim-build')) { $adjustArgs += '--strong-timer' }
+          python benchmarks/retention/shorten-upstream-build.py @adjustArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Build adjustment failed' }
+      - name: Isolate the libuv poll stack frame for a diagnostic runtime
+        if: contains(fromJSON('["runtime-libuv-noinline-build", "runtime-libuv-native-trim-build", "runtime-libuv-poll-clear-build", "runtime-libuv-poll-clear-trim-build"]'), inputs.retention-diagnostic)
+        run: |
+          $pollArgs = @((Join-Path $env:GITHUB_WORKSPACE 'bun-source'), (Join-Path $env:RUNNER_TEMP 'libuv-poll-adjustments.json'))
+          if ('${{ inputs.retention-diagnostic }}' -in @('runtime-libuv-poll-clear-build', 'runtime-libuv-poll-clear-trim-build')) { $pollArgs += '--clear' }
+          python benchmarks/retention/instrument-libuv-poll.py @pollArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Libuv diagnostic adjustment failed' }
+      - name: Enable native Windows trim-link feasibility control
+        if: contains(fromJSON('["runtime-libuv-native-trim-build", "runtime-libuv-poll-clear-trim-build"]'), inputs.retention-diagnostic)
+        run: |
+          $nativeTrimArgs = @((Join-Path $env:GITHUB_WORKSPACE 'bun-source'), (Join-Path $env:RUNNER_TEMP 'native-trim-adjustments.json'))
+          if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-poll-clear-trim-build') { $nativeTrimArgs += @('--native-lib', '--neutral-data') }
+          python benchmarks/retention/instrument-native-trim.py @nativeTrimArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Native trim diagnostic adjustment failed' }
+      - name: Instrument the pinned collector for a separate diagnostic runtime
+        if: contains(fromJSON('["runtime-trace-build", "runtime-full-trace-build", "runtime-slot-trace-build", "runtime-origin-trace-build", "runtime-clear-trace-build", "runtime-unwind-build"]'), inputs.retention-diagnostic)
+        run: |
+          $traceArgs = @((Join-Path $env:GITHUB_WORKSPACE 'bun-source'), (Join-Path $env:GITHUB_WORKSPACE 'webkit-source'), (Join-Path $env:RUNNER_TEMP 'collector-trace-adjustments.json'))
+          if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-full-trace-build') { $traceArgs += '--normal-edges' }
+          if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-slot-trace-build') { $traceArgs += '--scan-slots' }
+          if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-origin-trace-build') { $traceArgs += '--scan-origin' }
+          if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-clear-trace-build') { $traceArgs += '--clear-range' }
+          if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-unwind-build') { $traceArgs += '--unwind' }
+          python benchmarks/retention/instrument-collector.py @traceArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Collector instrumentation failed' }
+      - name: Download inputs for the partial link
+        if: inputs.retention-diagnostic == 'runtime-rust-relink'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45155613235') { throw 'The partial link requires the identified failed source build' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headBranch,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'failure' -or $run.headBranch -ne $env:GITHUB_REF_NAME -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected failed source-build identity' }
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-uninstrumented-source-runtime --dir (Join-Path $env:RUNNER_TEMP 'runtime-rust-relink-inputs')
+          if ($LASTEXITCODE -ne 0) { throw 'Failed-build input download failed' }
+      - name: Build source runtime with adjusted codegen paths and release LTO
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE 'bun-source'
+          $webkit = Join-Path $env:GITHUB_WORKSPACE 'webkit-source'
+          if ((Test-Path 'D:\b') -or (Test-Path 'D:\w')) { throw 'Short build paths already exist' }
+          try {
+          Move-Item $source 'D:\b'
+          Move-Item $webkit 'D:\w'
+          Set-Location 'D:\b'
+          . (Join-Path (Join-Path (Get-Location).Path 'scripts') 'vs-shell.ps1')
+          $paths = @($env:PATH, [Environment]::GetEnvironmentVariable('PATH', 'Machine'), [Environment]::GetEnvironmentVariable('PATH', 'User')) -join ';'
+          $cleanPath = ($paths -split ';' | Where-Object { $_ -and $_ -notmatch '(?i)strawberry' }) -join ';'
+          $llvmDir = @('C:\LLVM23\bin', 'C:\Program Files\LLVM\bin') | Where-Object {
+            (Test-Path (Join-Path $_ 'clang.exe')) -and ((& (Join-Path $_ 'clang.exe') --version | Select-Object -First 1) -match 'clang version 23\.1\.1')
+          } | Select-Object -First 1
+          if (-not $llvmDir) { throw 'Verified LLVM 23.1.1 executable not found' }
+          if ($env:RETENTION_DIAGNOSTIC -in @('runtime-libuv-native-trim-build', 'runtime-libuv-poll-clear-trim-build')) {
+            & (Join-Path $env:GITHUB_WORKSPACE 'benchmarks/retention/install-llvm-undname.ps1') -Destination $llvmDir
+          }
+          $env:PATH = "$llvmDir;C:\Program Files\NASM;$cleanPath;C:\Program Files\Git\usr\bin;C:\cygwin64\bin"
+          $env:BUN_WEBKIT_PATH = 'D:\w'
+          $env:RUSTUP_TOOLCHAIN = 'nightly-2026-09-15'
+          clang --version
+          nasm --version
+          perl --version
+          rustc --version --verbose
+          $webkitRevision = git -C $env:BUN_WEBKIT_PATH rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $webkitRevision -ne '4d45755fed4aeef19e95beb90d3d0c884a2812bd') { throw "Unexpected WebKit checkout: $webkitRevision" }
+          $sourceRevision = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $sourceRevision -ne 'b1007f1177fd402fae67387b8548cae5ae9b5707') { throw "Unexpected Bun checkout: $sourceRevision" }
+          Write-Host "Bun source: $sourceRevision; WebKit source: $webkitRevision"
+          # Bun's build script prefers CI commit variables over the checkout.
+          # This step builds Bun, not the repository that dispatched the job.
+          $env:BUILDKITE_COMMIT = $sourceRevision
+          $env:GITHUB_SHA = $sourceRevision
+          $env:GIT_SHA = $sourceRevision
+          $aotSources = Join-Path $env:BUN_WEBKIT_PATH 'Source/JavaScriptCore/aot/Sources.txt'
+          if ([Array]::IndexOf([IO.File]::ReadAllBytes($aotSources), [byte]13) -ge 0) { throw 'WebKit AOT source list contains CRLF' }
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Bun source dependency install failed' }
+          if ($env:RETENTION_DIAGNOSTIC -in @('runtime-rust-symbols', 'runtime-rust-relink')) {
+            bun scripts/build.ts --profile=release-local --lto=on --build-dir=build/release-local --target=bun-rust
+            if ($LASTEXITCODE -ne 0) { throw 'Pinned Rust archive build failed' }
+            $archives = @(Get-ChildItem build/release-local/rust-target -File -Recurse -Filter 'libbun_runtime-*.rlib')
+            if ($archives.Count -ne 1) { throw 'Expected exactly one Bun runtime archive' }
+            $evidence = Join-Path $env:RUNNER_TEMP 'runtime-rust-symbols'
+            New-Item -ItemType Directory -Path $evidence | Out-Null
+            Get-FileHash -Algorithm SHA256 $archives[0].FullName | Format-List | Out-File (Join-Path $evidence 'archive-hash.txt')
+            & (Join-Path $llvmDir 'llvm-nm.exe') --format=posix --defined-only $archives[0].FullName *> (Join-Path $evidence 'runtime-symbols.txt')
+            if ($LASTEXITCODE -ne 0) { throw 'Rust archive symbol inspection failed' }
+            rustc --version --verbose | Out-File (Join-Path $evidence 'rust-version.txt')
+            if ($LASTEXITCODE -ne 0) { throw 'Rust compiler identity failed' }
+            if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-rust-relink') {
+              $objects = @()
+              foreach ($item in @(@('RunLoopBun.cpp.obj', '94b196204805f39566f1d1a06df18baec8755458577a45fe72b8d6fff6379011'), @('UnifiedSource-runtime-28.cpp.obj', '2e25b5e0a68babc3750d70b33325cfd3cabf08a2ef325a95606b441cc72a63a7'))) {
+                $found = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'runtime-rust-relink-inputs') -File -Recurse -Filter $item[0])
+                if ($found.Count -ne 1 -or (Get-FileHash -Algorithm SHA256 $found[0].FullName).Hash -ne $item[1]) { throw 'Retained object identity mismatch' }
+                $objects += $found[0].FullName
+              }
+              $records = @()
+              foreach ($force in @($false, $true)) {
+                $label = if ($force) { 'forced' } else { 'ordinary' }
+                $dll = Join-Path $evidence "$label.dll"
+                $linkArgs = @('/dll', '/noentry', '/nodefaultlib', '/force:unresolved', '/opt:noref', '/LTCG', '/opt:lldlto=2', '/opt:lldltocgo=2', "/out:$dll")
+                if ($force) { $linkArgs += '/include:WTFTimer__update' }
+                & (Join-Path $llvmDir 'lld-link.exe') @linkArgs @objects $archives[0].FullName *> (Join-Path $evidence "$label-link.log")
+                $linkExit = $LASTEXITCODE
+                Remove-Item -LiteralPath $dll, (Join-Path $evidence "$label.lib"), (Join-Path $evidence "$label.exp") -Force -ErrorAction SilentlyContinue
+                $records += @{ forceTimer = $force; exitCode = $linkExit; scope = 'partial link; unresolved references allowed; output removed without execution' }
+              }
+              $records | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $evidence 'partial-link-results.json')
+              $global:LASTEXITCODE = 0
+            }
+            return
+          }
+          # Upstream disables native Windows trim links; only the separate
+          # feasibility control adjusts that source guard. Inspection remains essential.
+          $trimArgs = @(if ($env:RETENTION_DIAGNOSTIC -in @('runtime-libuv-native-trim-build', 'runtime-libuv-poll-clear-trim-build')) { '--trimmable=on' })
+          bun scripts/build.ts --profile=release-local --lto=on --build-dir=build/release-local @trimArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Source runtime build failed' }
+          $runtime = Resolve-Path build/release-local/bun.exe
+          Get-FileHash -Algorithm SHA256 $runtime
+          & $runtime --revision
+          if ($LASTEXITCODE -ne 0) { throw 'Built runtime revision check failed' }
+          $revision = & $runtime -e 'process.stdout.write(Bun.revision)'
+          if ($LASTEXITCODE -ne 0 -or $revision -ne 'b1007f1177fd402fae67387b8548cae5ae9b5707') { throw "Unexpected built runtime revision: $revision" }
+          } finally {
+            Set-Location $env:GITHUB_WORKSPACE
+            if (Test-Path 'D:\b') { Move-Item 'D:\b' $source }
+            if (Test-Path 'D:\w') { Move-Item 'D:\w' $webkit }
+          }
+      - name: Retain targeted linker inputs after a build failure
+        if: ${{ failure() }}
+        run: |
+          $root = Join-Path $env:GITHUB_WORKSPACE 'bun-source/build/release-local'
+          $evidence = Join-Path $env:RUNNER_TEMP 'runtime-link-inputs'
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          $paths = @(
+            'build.ninja', 'bun-profile.exe.rsp', 'bun-profile.exe.lazy.rsp',
+            'bun-profile.exe.trim-work/first.map', 'bun-profile.exe.trim-work/first.symbols.map',
+            'deps/WebKit/icu/source/data/out/tmp/icudt79l_dat.obj',
+            'obj/vendor/WebKit/Source/WTF/wtf/bun/RunLoopBun.cpp.obj',
+            'obj/deps/WebKit/JavaScriptCore/DerivedSources/unified-sources/UnifiedSource-runtime-28.cpp.obj'
+          )
+          foreach ($path in $paths) {
+            $inputPath = Join-Path $root $path
+            if (Test-Path -LiteralPath $inputPath -PathType Leaf) {
+              $target = Join-Path $evidence $path
+              New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+              Copy-Item -LiteralPath $inputPath -Destination $target
+              Get-FileHash -Algorithm SHA256 -LiteralPath $inputPath | Format-List | Out-File -Append (Join-Path $evidence 'hashes.txt')
+            }
+          }
+          $archives = @(Get-ChildItem (Join-Path $root 'rust-target') -File -Recurse -Filter 'libbun_runtime-*.rlib' -ErrorAction SilentlyContinue)
+          if ($archives.Count -eq 1) {
+            Get-FileHash -Algorithm SHA256 $archives[0].FullName | Format-List | Out-File (Join-Path $evidence 'runtime-archive-hash.txt')
+            $llvmNm = @('C:\LLVM23\bin\llvm-nm.exe', 'C:\Program Files\LLVM\bin\llvm-nm.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            if ($llvmNm) { & $llvmNm --format=posix --defined-only $archives[0].FullName *> (Join-Path $evidence 'runtime-archive-symbols.txt') }
+          }
+      - name: Retain built runtime
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.retention-diagnostic == 'runtime-libuv-poll-clear-trim-build' && 'windows-libuv-poll-clear-trim-runtime' || inputs.retention-diagnostic == 'runtime-libuv-poll-clear-build' && 'windows-libuv-poll-clear-runtime' || inputs.retention-diagnostic == 'runtime-libuv-native-trim-build' && 'windows-libuv-native-trim-runtime' || inputs.retention-diagnostic == 'runtime-libuv-noinline-build' && 'windows-libuv-noinline-runtime' || inputs.retention-diagnostic == 'runtime-unwind-build' && 'windows-unwind-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-clear-trace-build' && 'windows-clear-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-origin-trace-build' && 'windows-origin-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-slot-trace-build' && 'windows-slot-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-full-trace-build' && 'windows-full-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-trace-build' && 'windows-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-strong-build' && 'windows-strong-timer-diagnostic' || (inputs.retention-diagnostic == 'runtime-force-build' && 'windows-forced-timer-source-runtime') || (contains(fromJSON('["runtime-rust-symbols", "runtime-rust-relink"]'), inputs.retention-diagnostic) && 'windows-source-rust-symbols') || 'windows-uninstrumented-source-runtime' }}
+          path: |
+            bun-source/build/release-local/bun.exe
+            ${{ runner.temp }}/runtime-build-adjustments.json
+            ${{ runner.temp }}/collector-trace-adjustments.json
+            ${{ runner.temp }}/libuv-poll-adjustments.json
+            ${{ runner.temp }}/native-trim-adjustments.json
+            ${{ runner.temp }}/runtime-link-inputs/
+            ${{ runner.temp }}/runtime-rust-symbols/
+            !${{ runner.temp }}/runtime-rust-symbols/**/*.obj
+            !${{ runner.temp }}/runtime-rust-symbols/**/*.dll
+            !${{ runner.temp }}/runtime-rust-symbols/**/*.lib
+            !${{ runner.temp }}/runtime-rust-symbols/**/*.pdb
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux-runtime-cross-build:
+    name: Cross-build diagnostic Windows runtime
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-build' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: oven-sh/bun
+          ref: b1007f1177fd402fae67387b8548cae5ae9b5707
+          path: bun-source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: oven-sh/WebKit
+          ref: 4d45755fed4aeef19e95beb90d3d0c884a2812bd
+          path: webkit-source
+          sparse-checkout: |
+            Source
+            Tools
+            icu
+          persist-credentials: false
+      - name: Install pinned cross-build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/llvm-23.1.1.tar.xz"
+          curl --fail --location --retry 3 --output "$archive" https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-Linux-X64.tar.xz
+          printf '%s  %s\n' '832aeb58d105de1cabc7b982dd2c65de0610f7377df48ae8fc2dd8e97420a15c' "$archive" | sha256sum --check
+          mkdir "$RUNNER_TEMP/llvm"
+          tar -xJf "$archive" -C "$RUNNER_TEMP/llvm" --strip-components=1
+          echo "$RUNNER_TEMP/llvm/bin" >> "$GITHUB_PATH"
+          sudo apt-get update
+          sudo apt-get install -y nasm
+          rustup toolchain install nightly-2026-09-15 --profile minimal --component rust-src --component llvm-tools --target x86_64-pc-windows-msvc
+      - name: Build pinned Windows runtime from Linux
+        shell: bash
+        env:
+          BUN_WEBKIT_PATH: ${{ github.workspace }}/webkit-source
+          RUSTUP_TOOLCHAIN: nightly-2026-09-15
+          BUILDKITE_COMMIT: b1007f1177fd402fae67387b8548cae5ae9b5707
+          GIT_SHA: b1007f1177fd402fae67387b8548cae5ae9b5707
+        run: |
+          set -euo pipefail
+          export GITHUB_SHA="$BUILDKITE_COMMIT"
+          test "$(git -C bun-source rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C webkit-source rev-parse HEAD)" = 4d45755fed4aeef19e95beb90d3d0c884a2812bd
+          cd bun-source
+          bun install --frozen-lockfile
+          # On CI, the pinned Bun build fetches the Microsoft SDK/MSVC sysroot
+          # with xwin --accept-license when no complete sysroot is present.
+          bun scripts/build.ts --profile=release-local --lto=on --trimmable=on --os=windows --arch=x64 --build-dir=build/release-cross-windows
+          test -f build/release-cross-windows/bun.exe
+          sha256sum build/release-cross-windows/bun.exe > "$RUNNER_TEMP/cross-runtime-sha256.txt"
+      - name: Retain diagnostic runtime and identity
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-cross-source-runtime
+          path: |
+            bun-source/build/release-cross-windows/bun.exe
+            ${{ runner.temp }}/cross-runtime-sha256.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux-runtime-cross-tools:
+    name: Verify Linux Windows cross-build tools
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-tools' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install pinned LLVM, NASM and Rust cross target
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/llvm-23.1.1.tar.xz"
+          curl --fail --location --retry 3 --output "$archive" https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/LLVM-23.1.1-Linux-X64.tar.xz
+          printf '%s  %s\n' '832aeb58d105de1cabc7b982dd2c65de0610f7377df48ae8fc2dd8e97420a15c' "$archive" | sha256sum --check
+          mkdir "$RUNNER_TEMP/llvm"
+          tar -xJf "$archive" -C "$RUNNER_TEMP/llvm" --strip-components=1
+          sudo apt-get update
+          sudo apt-get install -y nasm
+          rustup toolchain install nightly-2026-09-15 --profile minimal --component rust-src --component llvm-tools --target x86_64-pc-windows-msvc
+          export PATH="$RUNNER_TEMP/llvm/bin:$PATH"
+          for tool in clang clang-cl lld-link llvm-lib llvm-rc; do
+            command -v "$tool"
+          done
+          clang --version | head -n 1
+          clang-cl --version | head -n 1
+          lld-link --version
+          nasm --version
+          rustup run nightly-2026-09-15 rustc --version --verbose
+          rustup target list --toolchain nightly-2026-09-15 --installed
+          df -h "$RUNNER_TEMP"
+
+  linux-runtime-cross-preflight:
+    name: Linux Windows cross-build preflight
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-cross-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Inspect existing cross-build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$RUNNER_TEMP"
+          for tool in clang clang-cl lld-link llvm-lib llvm-rc cmake ninja nasm rustup cargo; do
+            if command -v "$tool" >/dev/null; then
+              printf '%s: %s\n' "$tool" "$(command -v "$tool")"
+            else
+              printf '%s: unavailable\n' "$tool"
+            fi
+          done
+          if command -v clang >/dev/null; then clang --version; fi
+          if command -v rustup >/dev/null; then rustup show; fi
+          for root in /opt/winsysroot /opt/xwin; do
+            if [[ -d "$root" ]]; then printf '%s: present\n' "$root"; else printf '%s: absent\n' "$root"; fi
+          done
+
+  windows-unwind-preflight:
+    name: Windows collector unwind preflight
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-unwind-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compile and run bounded unwind probe
+        shell: cmd
+        run: |
+          @echo on
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set "BN_VS_PATH=%%i"
+          if not defined BN_VS_PATH exit /b 1
+          call "%BN_VS_PATH%\Common7\Tools\VsDevCmd.bat" -arch=x64
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /O2 /EHsc /I benchmarks\retention benchmarks\retention\collector-unwind-preflight.cpp /Fe:"%RUNNER_TEMP%\collector-unwind-preflight.exe"
+          if errorlevel 1 exit /b 1
+          "%RUNNER_TEMP%\collector-unwind-preflight.exe"
+          if errorlevel 1 exit /b 1
+
+  windows-runtime-preflight:
+    name: Windows runtime build preflight
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Verify pinned Windows demangler
+        shell: pwsh
+        run: ./benchmarks/retention/install-llvm-undname.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'llvm-undname-preflight')
+      - name: Inspect available build tools and disk space
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object DeviceID, Size, FreeSpace | Format-Table
+          foreach ($tool in @('clang', 'clang-cl', 'lld-link', 'rustup', 'cargo', 'go', 'nasm', 'ruby', 'perl', 'python', 'cmake', 'ninja', 'make', 'bash')) {
+            $command = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($command) { Write-Output "$tool : $($command.Source)" } else { Write-Output "$tool : unavailable" }
+          }
+          if (Get-Command clang -CommandType Application -ErrorAction SilentlyContinue) { clang --version }
+          if (Get-Command rustup -CommandType Application -ErrorAction SilentlyContinue) { rustup show }
+          # Inventory the already-installed SDK and MSVC/ATL before considering
+          # a cross-build sysroot; do not download or accept any license here.
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if ($LASTEXITCODE -ne 0 -or !$vs) { throw 'Visual Studio installation not found' }
+          Write-Output "Visual Studio: $vs"
+          Get-ChildItem (Join-Path $vs 'VC/Tools/MSVC') -Directory | ForEach-Object {
+            $atl = Join-Path $_.FullName 'atlmfc/include/atlstr.h'
+            $crt = Join-Path $_.FullName 'include/vcruntime.h'
+            Write-Output "MSVC $($_.Name): ATL=$(Test-Path $atl), CRT=$(Test-Path $crt)"
+          }
+          $kit = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10'
+          Get-ChildItem (Join-Path $kit 'Include') -Directory | ForEach-Object {
+            $kernel = Join-Path $kit "Lib/$($_.Name)/um/x64/kernel32.lib"
+            Write-Output "SDK $($_.Name): kernel32=$(Test-Path $kernel)"
+          }
+
   linux:
     name: Linux core/Solid/React development and AOT comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic == 'none')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -228,7 +2363,7 @@ jobs:
   # The hosted VM's paravirtual Metal device is not a physical GPU.
   macos:
     name: macOS core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic == 'none')
     runs-on: macos-15
     timeout-minutes: 60
     defaults:
@@ -311,7 +2446,7 @@ jobs:
   # benchmarks/comparison/windows-processes.ts. The VM has no physical GPU.
   windows:
     name: Windows core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["none", "native-fixture", "native-safe-fixture"]'), inputs.retention-diagnostic))
     runs-on: windows-2022
     timeout-minutes: 75
     defaults:
@@ -336,6 +2471,14 @@ jobs:
       - name: Install the pinned Bun and Rust toolchains and downloads
         id: toolchain
         uses: ./.github/actions/native-toolchain
+      - name: Install the isolated native fixture diagnostic
+        if: github.event_name == 'workflow_dispatch' && contains(fromJSON('["native-fixture", "native-safe-fixture"]'), inputs.retention-diagnostic)
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
+        run: |
+          $fixture = if ($env:RETENTION_DIAGNOSTIC -eq 'native-safe-fixture') { 'safe-clear' } else { 'clear-view-listener' }
+          python benchmarks/retention/prepare-native-fixture.py $env:COMPARISON $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Native fixture diagnostic preparation failed' }
       - name: Locate the installed Windows SDK shader compiler
         run: |
           $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
@@ -365,11 +2508,19 @@ jobs:
           } | Format-List | Out-File (Join-Path $env:COMPARISON 'hardware.txt')
       - name: Run the equivalent-workload comparison
         timeout-minutes: 45
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
         run: |
           bun benchmarks/comparison/run.ts `
             --host (Join-Path $env:GITHUB_WORKSPACE 'target/release/bun-native-host.exe') --host-profile release `
             --output (Join-Path $env:COMPARISON 'run') --trials $env:TRIALS --input-trials 0
           if ($LASTEXITCODE -ne 0) { throw "The comparison exited $LASTEXITCODE" }
+          if ($env:RETENTION_DIAGNOSTIC -in @('native-fixture', 'native-safe-fixture')) {
+            $reportPath = Join-Path $env:COMPARISON 'run/comparison.json'
+            if (!(Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'The diagnostic report is missing' }
+            $report = Get-Content -Raw -LiteralPath $reportPath | ConvertFrom-Json
+            if ($report.status -ne 'passed' -or @($report.failedLaunches).Count -ne 0) { throw 'The diagnostic recorded failed launches' }
+          }
       - name: Run the direct Rust GPUI baseline
         if: ${{ !cancelled() && hashFiles('target/release/examples/workload-baseline.exe') != '' }}
         timeout-minutes: 10
@@ -414,10 +2565,247 @@ jobs:
         timeout-minutes: 3
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: benchmark-comparison-windows-${{ runner.arch }}
+          name: ${{ contains(fromJSON('["native-fixture", "native-safe-fixture"]'), inputs.retention-diagnostic) && format('{0}-diagnostic-windows-{1}', inputs.retention-diagnostic, runner.arch) || format('benchmark-comparison-windows-{0}', runner.arch) }}
           path: |
             ${{ runner.temp }}/comparison/
             !${{ runner.temp }}/comparison/run/*/application.exe
           include-hidden-files: true
           if-no-files-found: error
+          retention-days: 30
+      - name: Restore the original fixture in the isolated checkout
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && contains(fromJSON('["native-fixture", "native-safe-fixture"]'), inputs.retention-diagnostic) && env.COMPARISON != '' }}
+        run: |
+          $original = Join-Path $env:COMPARISON 'original-react.tsx.txt'
+          if (Test-Path -LiteralPath $original) {
+            Copy-Item -LiteralPath $original -Destination 'benchmarks/solid/react.tsx' -Force
+            if ((Get-FileHash -Algorithm SHA256 'benchmarks/solid/react.tsx').Hash -ne 'ce636a55012d21d54cecc89ad0664d76d3ef9fc0a83211ca27bd301d350745a1') { throw 'Fixture restoration failed' }
+          }
+
+  windows-retention-scan:
+    name: Windows retention scan control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'narrow-scan' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Build pinned headless peer and inspected AOT workload
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'windows-retention-scan'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $env:CONTROL_ROOT = $root
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          bun -e 'import { bundleApplication } from "./scripts/native/bundle.ts"; await bundleApplication({framework:"react",entry:"benchmarks/solid/react.tsx",outdir:process.env.CONTROL_ROOT + "/react",cwd:process.cwd()})'
+          if ($LASTEXITCODE -ne 0) { throw 'React bundle failed' }
+          bun --no-install compile --no-script --production --explain=json (Join-Path $root 'react/application.js') --outfile (Join-Path $root 'react-aot.exe') *> (Join-Path $root 'compile.log')
+          if ($LASTEXITCODE -ne 0) { throw 'AOT compile failed' }
+          bun -e 'import { inspectBunExecutable } from "./scripts/native/inspect.ts"; import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); if (!graph.hasCompiledProgram || runtime.jit !== "unused") throw new Error("Not AOT"); console.log(JSON.stringify({graph,runtime},null,2))' (Join-Path $root 'react-aot.exe') > (Join-Path $root 'inspection.json')
+          if ($LASTEXITCODE -ne 0) { throw 'AOT inspection failed' }
+      - name: Alternate scan settings with positive controls
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'windows-retention-scan'
+          $runtime = (Get-Command bun -CommandType Application).Source
+          $env:BUN_NATIVE_DIAG_NARROW_DUMP = '1'
+          try {
+            foreach ($trial in 0..4) {
+              $order = if ($trial % 2 -eq 0) { @('1', '0') } else { @('0', '1') }
+              foreach ($scan in $order) {
+                $env:BUN_JSC_useNarrowReferenceScan = $scan
+                python benchmarks/retention/headless-adapter-control.py react (Join-Path $root 'peer.exe') (Join-Path $root 'react/application.js') (Join-Path $root 'react-aot.exe') (Join-Path $root "$trial-scan-$scan") 1 $runtime
+                if ($LASTEXITCODE -ne 0) { throw "Scan $scan pair failed outside retention observation" }
+              }
+            }
+            foreach ($scan in @('1', '0')) {
+              $env:BUN_JSC_useNarrowReferenceScan = $scan
+              python benchmarks/retention/react-dispatch-control.py (Join-Path $root 'peer.exe') (Join-Path $root "positive-scan-$scan") 1 cycle $runtime
+              if ($LASTEXITCODE -ne 0) { throw "Scan $scan positive control failed" }
+            }
+          } finally {
+            Remove-Item Env:BUN_JSC_useNarrowReferenceScan -ErrorAction SilentlyContinue
+            Remove-Item Env:BUN_NATIVE_DIAG_NARROW_DUMP -ErrorAction SilentlyContinue
+          }
+      - name: Retain observations and failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-retention-scan
+          path: |
+            ${{ runner.temp }}/windows-retention-scan/
+            !${{ runner.temp }}/windows-retention-scan/**/*.exe
+          retention-days: 30
+
+  windows-batch-release:
+    name: Windows paired batch-release control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'batch-release' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Build pinned baseline and candidate workloads
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'batch-release-control'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          python benchmarks/retention/batch-release-build.py $root
+          if ($LASTEXITCODE -ne 0) { throw 'Source-matched control build failed' }
+      - name: Alternate source variants and check pinned control
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'batch-release-control'
+          $runtime = (Get-Command bun -CommandType Application).Source
+          foreach ($trial in 0..4) {
+            $order = if ($trial % 2 -eq 0) { @('baseline', 'candidate') } else { @('candidate', 'baseline') }
+            foreach ($variant in $order) {
+              python benchmarks/retention/headless-adapter-control.py react (Join-Path $root 'peer.exe') (Join-Path $root "$variant/application.js") (Join-Path $root "$variant.exe") (Join-Path $root "$trial-$variant") 1 $runtime
+              if ($LASTEXITCODE -ne 0) { throw "$variant pair failed outside retention observation" }
+            }
+          }
+          python benchmarks/retention/react-dispatch-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'positive-candidate') 1 cycle $runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate positive control failed' }
+      - name: Retain observations and failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-batch-release-control
+          path: |
+            ${{ runner.temp }}/batch-release-control/
+            !${{ runner.temp }}/batch-release-control/**/*.exe
+          retention-days: 30
+
+  windows-react-empty-unmount:
+    name: Windows paired React retention control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["react-empty-unmount", "react-empty-safe", "react-fixture-setters"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 70
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Build peer and compare source variants with deliberate pins
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'react-unmount-control'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $env:RUNNER_TEMP 'react-unmount-peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Headless peer build failed' }
+          $fixture = if ('${{ inputs.retention-diagnostic }}' -eq 'react-empty-safe') { 'safe' } elseif ('${{ inputs.retention-diagnostic }}' -eq 'react-fixture-setters') { 'fixture-pair' } else { 'original' }
+          python benchmarks/retention/react-unmount-control.py (Join-Path $env:RUNNER_TEMP 'react-unmount-peer.exe') $root $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'A paired source or pin control was invalid' }
+      - name: Retain all observations, including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-react-unmount-control
+          path: |
+            ${{ runner.temp }}/react-unmount-control/
+            !${{ runner.temp }}/react-unmount-control/**/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-fixture-core-matrix:
+    name: Windows fixture and batch ownership matrix
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'fixture-core-matrix' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 70
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Build the pinned headless peer
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'fixture-core-matrix'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+      - name: Compare fixture ownership controls under both batch variants
+        run: |
+          python benchmarks/retention/fixture-core-matrix.py (Join-Path $env:RUNNER_TEMP 'fixture-core-matrix')
+          if ($LASTEXITCODE -ne 0) { throw 'The fixture and batch ownership matrix failed' }
+      - name: Retain every control and source identity
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-fixture-core-matrix
+          path: |
+            ${{ runner.temp }}/fixture-core-matrix/
+            !${{ runner.temp }}/fixture-core-matrix/**/*.exe
+          retention-days: 30
+
+  windows-listener-control:
+    name: Windows listener retention control
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["listener", "safe-listener", "core-ownership", "core-group", "shutdown", "first-observation", "timer-collection"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Build the pinned headless peer
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'listener-retention-control'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+      - name: Run the selected retention control
+        env:
+          RETENTION_CONTROL_KIND: ${{ inputs.retention-diagnostic }}
+          RETENTION_CONTROL_TRIALS: ${{ inputs.trials }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'listener-retention-control'
+          $runtime = (Get-Command bun -CommandType Application).Source
+          $kind = $env:RETENTION_CONTROL_KIND
+          if ($kind -in @('core-ownership', 'core-group')) {
+            python benchmarks/retention/core-ownership-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'results') $kind
+          } else {
+            $trials = if ($kind -eq 'timer-collection') { $env:RETENTION_CONTROL_TRIALS } else { '3' }
+            if ($trials -notmatch '^([3-9]|10)$') { throw 'Retention control requires 3 to 10 trials' }
+            python benchmarks/retention/react-dispatch-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'results') $trials $kind $runtime
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'A retention control was invalid' }
+      - name: Retain observations and failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-listener-control
+          path: |
+            ${{ runner.temp }}/listener-retention-control/
+            !${{ runner.temp }}/listener-retention-control/**/*.exe
           retention-days: 30

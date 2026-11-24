@@ -124,6 +124,25 @@ const OPERATION_BYTES = (() => {
 const native = (message: string) => new NativeCommandError('invalid_state', 1, message)
 
 describe('coalesced batch groups', () => {
+  test('completed and rejected entries release their update closures', async () => {
+    const target = window()
+    const success = () => 'completed'
+    const failure = () => {
+      throw new Error('callback failed')
+    }
+    const entries: BatchEntry[] = [success, failure].map((update) => ({
+      update,
+      resolve() {},
+      reject() {},
+    }))
+    const release = await runBatches(target, entries, target.limits)
+    release()
+    expect(entries[0]!.update).not.toBe(success)
+    expect(entries[1]!.update).not.toBe(failure)
+    expect(() => entries[0]!.update({} as NativeBatch)).toThrow('Batch callback has already run')
+    expect(() => entries[1]!.update({} as NativeBatch)).toThrow('Batch callback has already run')
+  })
+
   test('callbacks run in order over the candidate before them and share one native batch', async () => {
     const target = window()
     let first: NativeNode<'text'> | undefined
