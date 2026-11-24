@@ -41,6 +41,43 @@ function same(left: unknown, right: unknown): boolean {
 
 const noChildren: readonly Node[] = Object.freeze([])
 
+// Moving the last child to the front leaves every other child stable.
+function rotatedChildren(
+  current: readonly Node[],
+  desired: readonly Node[]
+): Uint8Array | undefined {
+  const length = current.length
+  if (length !== desired.length || current[length - 1] !== desired[0]) return undefined
+  for (let index = 1; index < length; index += 1)
+    if (current[index - 1] !== desired[index]) return undefined
+  const stable = new Uint8Array(length)
+  stable.fill(1)
+  stable[0] = 0
+  return stable
+}
+
+// For one non-adjacent exchange, the unchanged middle is the unique longest
+// subsequence when the exchanged span has at least four children.
+function swappedChildren(
+  current: readonly Node[],
+  desired: readonly Node[]
+): Uint8Array | undefined {
+  if (current.length !== desired.length) return undefined
+  let start = 0
+  let end = current.length
+  while (start < end && current[start] === desired[start]) start += 1
+  while (end > start && current[end - 1] === desired[end - 1]) end -= 1
+  if (end - start < 4 || current[start] !== desired[end - 1] || current[end - 1] !== desired[start])
+    return undefined
+  for (let index = start + 1; index < end - 1; index += 1)
+    if (current[index] !== desired[index]) return undefined
+  const stable = new Uint8Array(desired.length)
+  stable.fill(1)
+  stable[start] = 0
+  stable[end - 1] = 0
+  return stable
+}
+
 function updateInput(
   window: NativeWindow,
   batch: NativeBatch,
@@ -258,7 +295,18 @@ export async function commitNativeTree(
         continue
       }
       const siblings = editChildren(parent)
-      const stable = stableChildren(siblings, state.children)
+      // Wide rotations and interior exchanges have a known optimal ordering;
+      // narrow lists and other edits use the ordinary planner.
+      const stable =
+        (siblings.length >= 256 && siblings[0] !== state.children[0]
+          ? rotatedChildren(siblings, state.children)
+          : undefined) ??
+        (siblings.length >= 256 &&
+        siblings[0] === state.children[0] &&
+        siblings[siblings.length - 1] === state.children[state.children.length - 1]
+          ? swappedChildren(siblings, state.children)
+          : undefined) ??
+        stableChildren(siblings, state.children)
       // `before` tracks the anchor's working index from the end; it only moves
       // left, so locating stable anchors costs O(children) for the whole list.
       let before = siblings.length

@@ -11,6 +11,7 @@ per sample in two scenarios:
   under the root; exactly one `insert`.
 - `swap`: the second and second-to-last keyed rows under the root trade
   places; exactly two `insert`s.
+- `rotate`: the last keyed row moves to the front; exactly one `insert`.
 
 `stageP50Ms` is the median time of the staging calls alone, before the commit.
 
@@ -36,6 +37,18 @@ publish and listener reconciliation work. They exclude core validation,
 serialization, IPC, native model work and paint, and are not input-to-paint
 latency. Timings are wall-clock per commit with nearest-rank percentiles; run
 several processes and compare distributions rather than one result.
+
+`swap-native.ts` separately alternates swaps and rotations in 100- and
+500-row real windows, measuring staging through native acknowledgement. It
+checks the staged order, revision and lifecycle cleanup; it does not measure
+OS input or display presentation. The Linux paired workflow runs development
+and inspected AOT clients against the same release host, with fresh-process
+A/A controls and alternating baseline/candidate pairs. Each process provides
+one median per case; individual updates are not independent trials.
+The same workflow compares the in-process renderer fixture on Linux, macOS,
+and Windows in development mode, plus inspected AOT clients on Linux and macOS.
+Windows AOT is excluded because the pinned source-built Windows toolchain does
+not yet establish the same JIT-removed configuration.
 
 ## Recorded comparison
 
@@ -228,8 +241,9 @@ trims the common ends and runs its longest-subsequence search over typed
 arrays, returning flags by desired index instead of a set.
 
 What remains proportional to the tree: a recaptured wide parent still copies
-its child list, and a reorder whose middle spans the list (the `swap` rows)
-still builds one position map over that middle. Solid's own `<For>` mapping
+its child list, and general reorders still build a position map over the changed
+middle. Wide simple swaps and last-child-to-front rotations use dedicated scans.
+Solid's own `<For>` mapping
 and react-reconciler's `getHostSibling` dominate the adapters' `sync` time.
 
 ## Clearing a suffix through core

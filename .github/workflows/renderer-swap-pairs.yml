@@ -1,0 +1,187 @@
+name: Renderer swap native pairs
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize]
+    paths:
+      - .github/workflows/renderer-swap-pairs.yml
+      - benchmarks/renderer/commit.ts
+      - benchmarks/renderer/swap-native.ts
+      - benchmarks/renderer/swap-native-pairs.py
+      - benchmarks/renderer/swap-renderer-pairs.py
+      - packages/renderer/src/native-tree.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renderer-swap-pairs-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'pull_request' && (github.event.pull_request.draft && '-draft' || '-ready') || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pairs:
+    name: Renderer swap native pairs (Linux)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Checkout pinned baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 841ea02653a54ea7a3e2ccdc80dbac6520e3b686
+          path: .baseline
+          persist-credentials: false
+      - name: Verify sources and share the fixture
+        run: |
+          set -euo pipefail
+          base=841ea02653a54ea7a3e2ccdc80dbac6520e3b686
+          test "$(git -C .baseline rev-parse HEAD)" = "$base"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --name-only "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/renderer-swap-changed.txt"
+          python3 - <<'PY2'
+          import os
+          from pathlib import Path
+          allowed = {'.github/workflows/renderer-swap-pairs.yml', 'benchmarks/renderer/README.md', 'benchmarks/renderer/commit.ts', 'benchmarks/renderer/swap-native.ts', 'benchmarks/renderer/swap-native-pairs.py', 'benchmarks/renderer/swap-renderer-pairs.py', 'packages/renderer/src/native-tree.ts', 'scripts/quality/native_harness/native_paint_observer.py', 'tests/quality/test_native_paint_observer.py', 'tests/renderers/incremental-commit.test.ts', 'tests/quality/test_renderer_swap_pairs.py', 'tests/quality/ci-event-coverage.test.ts'}
+          changed = set((Path(os.environ['RUNNER_TEMP']) / 'renderer-swap-changed.txt').read_text().splitlines())
+          if not changed or changed - allowed:
+              raise SystemExit(f'Unexpected source changes: {sorted(changed - allowed)}')
+          PY2
+          cmp rust-toolchain.toml .baseline/rust-toolchain.toml
+          cmp Cargo.lock .baseline/Cargo.lock
+          mkdir -p .baseline/benchmarks/renderer
+          cp benchmarks/renderer/swap-native.ts .baseline/benchmarks/renderer/swap-native.ts
+          cmp benchmarks/renderer/swap-native.ts .baseline/benchmarks/renderer/swap-native.ts
+      - name: Install native prerequisites
+        timeout-minutes: 25
+        uses: ./.github/actions/linux-native-prerequisites
+      - name: Build shared release host and inspected AOT clients
+        timeout-minutes: 60
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p bun-native-host --bin bun-native-host
+          for variant in base candidate; do
+            if [[ "$variant" == base ]]; then source_dir="$GITHUB_WORKSPACE/.baseline"; else source_dir="$GITHUB_WORKSPACE"; fi
+            (cd "$source_dir"; bun install --frozen-lockfile --ignore-scripts)
+            mkdir -p "$RUNNER_TEMP/renderer-swap-$variant"
+            SWAP_SOURCE="$source_dir" SWAP_OUTPUT="$RUNNER_TEMP/renderer-swap-$variant/app" bun -e '
+              import { compileApplication } from "./scripts/native/compile.ts";
+              const source = process.env.SWAP_SOURCE!;
+              const output = process.env.SWAP_OUTPUT!;
+              console.log(JSON.stringify(compileApplication(source + "/benchmarks/renderer/swap-native.ts", output, source)));
+            ' > "$RUNNER_TEMP/renderer-swap-$variant/inspection.json"
+          done
+      - name: Collect native development and AOT pairs
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          bash scripts/quality/native-x11-session.sh "$RUNNER_TEMP/renderer-swap-session" -- \
+            python3 benchmarks/renderer/swap-native-pairs.py \
+              --base-source "$GITHUB_WORKSPACE/.baseline" --candidate-source "$GITHUB_WORKSPACE" \
+              --host "$GITHUB_WORKSPACE/target/release/bun-native-host" \
+              --base-aot "$RUNNER_TEMP/renderer-swap-base/app" --candidate-aot "$RUNNER_TEMP/renderer-swap-candidate/app" \
+              --bun "$(command -v bun)" --bun-revision "$(bun -e 'console.log(Bun.revision)')" \
+              --base-commit 841ea02653a54ea7a3e2ccdc80dbac6520e3b686 --candidate-commit "$GITHUB_SHA" \
+              --output "$RUNNER_TEMP/renderer-swap-pairs"
+      - name: Retain observations and source identities
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: renderer-swap-native-Linux-X64
+          path: |
+            ${{ runner.temp }}/renderer-swap-pairs/
+            ${{ runner.temp }}/renderer-swap-session/
+            ${{ runner.temp }}/renderer-swap-changed.txt
+            ${{ runner.temp }}/renderer-swap-base/*.json
+            ${{ runner.temp }}/renderer-swap-candidate/*.json
+            !${{ runner.temp }}/renderer-swap-session/runtime/
+          if-no-files-found: warn
+          retention-days: 30
+
+  renderer-only:
+    name: Renderer swap controls (${{ matrix.os }})
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Checkout pinned baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 841ea02653a54ea7a3e2ccdc80dbac6520e3b686
+          path: .baseline
+          persist-credentials: false
+      - name: Verify sources and share the fixture
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = '841ea02653a54ea7a3e2ccdc80dbac6520e3b686'
+          if ((git -C .baseline rev-parse HEAD) -ne $base -or (git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Wrong source identity' }
+          $allowed = @('.github/workflows/renderer-swap-pairs.yml', 'benchmarks/renderer/README.md', 'benchmarks/renderer/commit.ts', 'benchmarks/renderer/swap-native.ts', 'benchmarks/renderer/swap-native-pairs.py', 'benchmarks/renderer/swap-renderer-pairs.py', 'packages/renderer/src/native-tree.ts', 'scripts/quality/native_harness/native_paint_observer.py', 'tests/quality/test_native_paint_observer.py', 'tests/renderers/incremental-commit.test.ts', 'tests/quality/test_renderer_swap_pairs.py', 'tests/quality/ci-event-coverage.test.ts')
+          $changed = @(git diff --name-only $base $env:GITHUB_SHA)
+          if ($changed.Count -eq 0 -or @($changed | Where-Object { $_ -notin $allowed }).Count -ne 0) { throw "Unexpected source changes: $changed" }
+          $changed | Set-Content (Join-Path $env:RUNNER_TEMP 'renderer-only-changed.txt')
+          Copy-Item benchmarks/renderer/commit.ts .baseline/benchmarks/renderer/commit.ts -Force
+          if ((Get-FileHash benchmarks/renderer/commit.ts).Hash -ne (Get-FileHash .baseline/benchmarks/renderer/commit.ts).Hash) { throw 'Fixture mismatch' }
+      - name: Prepare matching clients
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($variant in @('base', 'candidate')) {
+            $source = if ($variant -eq 'base') { Join-Path $env:GITHUB_WORKSPACE '.baseline' } else { $env:GITHUB_WORKSPACE }
+            Push-Location $source
+            try { bun install --frozen-lockfile --ignore-scripts; if ($LASTEXITCODE -ne 0) { throw 'Bun install failed' } } finally { Pop-Location }
+            if ($env:RUNNER_OS -ne 'Windows') {
+              $dir = Join-Path $env:RUNNER_TEMP "renderer-only-$variant"
+              New-Item -ItemType Directory -Path $dir -Force | Out-Null
+              $env:SWAP_SOURCE = $source
+              $env:SWAP_OUTPUT = Join-Path $dir 'app'
+              bun -e 'import { compileApplication } from "./scripts/native/compile.ts"; const source=process.env.SWAP_SOURCE!; console.log(JSON.stringify(compileApplication(source + "/benchmarks/renderer/commit.ts", process.env.SWAP_OUTPUT!, source)));' | Set-Content (Join-Path $dir 'inspection.json')
+              if ($LASTEXITCODE -ne 0) { throw 'AOT compile or inspection failed' }
+            }
+          }
+      - name: Collect renderer pairs
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arguments = @('--base-source', (Join-Path $env:GITHUB_WORKSPACE '.baseline'), '--candidate-source', $env:GITHUB_WORKSPACE, '--bun', (Get-Command bun).Source, '--bun-revision', (bun -e 'console.log(Bun.revision)'), '--base-commit', '841ea02653a54ea7a3e2ccdc80dbac6520e3b686', '--candidate-commit', $env:GITHUB_SHA, '--output', (Join-Path $env:RUNNER_TEMP 'renderer-only-pairs'))
+          if ($env:RUNNER_OS -ne 'Windows') { $arguments += @('--base-aot', (Join-Path $env:RUNNER_TEMP 'renderer-only-base/app'), '--candidate-aot', (Join-Path $env:RUNNER_TEMP 'renderer-only-candidate/app')) }
+          python benchmarks/renderer/swap-renderer-pairs.py @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain renderer observations
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: renderer-swap-controls-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            ${{ runner.temp }}/renderer-only-pairs/
+            ${{ runner.temp }}/renderer-only-changed.txt
+            ${{ runner.temp }}/renderer-only-base/*.json
+            ${{ runner.temp }}/renderer-only-candidate/*.json
+          if-no-files-found: warn
+          retention-days: 30

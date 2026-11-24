@@ -276,6 +276,79 @@ for (const { seed, width } of variants) {
   })
 }
 
+for (const width of [255, 256, 257, 500]) {
+  test(`wide sibling exchanges preserve native order and minimal moves (${width} children)`, async () => {
+    const model = modelWindow()
+    const rows: Node[] = []
+    let container!: Node
+    const root = createRenderRoot(model.window, (context) => {
+      container = context.container
+      for (let index = 0; index < width; index += 1) {
+        const button = createElement('button')
+        setProperty(button, 'text', String(index))
+        insertNode(container, button)
+        rows.push(button)
+      }
+    })
+    await root.ready
+    const assertOrder = () => {
+      expect(model.native().map(nativeShape)).toEqual([stagedShape(container)])
+      expect(root.diagnostics.nodes).toBe(width + 1)
+    }
+    const before = { ...model.ops }
+    insertNode(container, rows[width - 2]!, rows[1]!)
+    insertNode(container, rows[1]!, rows[width - 1]!)
+    await root.flush()
+    assertOrder()
+    expect(model.ops).toEqual({ ...before, insert: before.insert + 2 })
+
+    // Adjacent exchanges have a one-move optimum and use the general planner.
+    const adjacentStart = { ...model.ops }
+    insertNode(container, container.children[11]!, container.children[10]!)
+    await root.flush()
+    assertOrder()
+    expect(model.ops).toEqual({ ...adjacentStart, insert: adjacentStart.insert + 1 })
+
+    // The same endpoints with a changed middle must use the general planner.
+    const current = [...container.children]
+    insertNode(container, current[width - 2]!, current[1]!)
+    insertNode(container, current[1]!, current[width - 1]!)
+    insertNode(container, current[width - 3]!, current[2]!)
+    insertNode(container, current[2]!, current[width - 1]!)
+    await root.flush()
+    assertOrder()
+
+    const rotationStart = { ...model.ops }
+    insertNode(container, container.children[width - 1]!, container.children[0]!)
+    await root.flush()
+    assertOrder()
+    expect(model.ops).toEqual({ ...rotationStart, insert: rotationStart.insert + 1 })
+
+    // The same first child with a changed middle is not a simple rotation.
+    const rotation = [...container.children]
+    insertNode(container, rotation[width - 1]!, rotation[0]!)
+    insertNode(container, rotation[width - 3]!, rotation[2]!)
+    await root.flush()
+    assertOrder()
+
+    // The reverse rotation remains a one-move operation on the general path.
+    const reverseStart = { ...model.ops }
+    insertNode(container, container.children[0]!)
+    await root.flush()
+    assertOrder()
+    expect(model.ops).toEqual({ ...reverseStart, insert: reverseStart.insert + 1 })
+
+    const ends = [...container.children]
+    const endsStart = { ...model.ops }
+    insertNode(container, ends[width - 1]!, ends[0]!)
+    insertNode(container, ends[0]!)
+    await root.flush()
+    assertOrder()
+    expect(model.ops).toEqual({ ...endsStart, insert: endsStart.insert + 2 })
+    await root.dispose()
+  })
+}
+
 test('a deep single-node edit sends one command and reuses every clean record', async () => {
   const model = modelWindow()
   const literals: Node[] = []
