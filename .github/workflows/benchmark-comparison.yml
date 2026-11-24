@@ -52,6 +52,7 @@ on:
             'runtime-libuv-noinline-compare',
             'runtime-libuv-native-compare',
             'runtime-libuv-native-calibration',
+            'runtime-libuv-native-performance',
             'runtime-unwind-build',
             'runtime-unwind-trace-compare',
             'runtime-origin-trace-compare',
@@ -759,7 +760,7 @@ jobs:
 
   windows-runtime-libuv-native-compare:
     name: Compare libuv poll layout with a native Windows host
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-libuv-native-compare", "runtime-libuv-native-calibration"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-libuv-native-compare", "runtime-libuv-native-calibration", "runtime-libuv-native-performance"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 100
     permissions:
@@ -824,7 +825,7 @@ jobs:
       - name: Run alternating native development controls
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
-          $extra = @(if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-native-calibration') { '--calibration' })
+          $extra = @(if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-native-calibration') { '--calibration' } elseif ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-native-performance') { '--performance' })
           python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $env:BASELINE_RUNTIME $env:SOURCE_RUNTIME (Join-Path $root 'native-pairs') @extra
           if ($LASTEXITCODE -ne 0) { throw 'At least one native workload was invalid' }
       - name: Retain controls and source identities
