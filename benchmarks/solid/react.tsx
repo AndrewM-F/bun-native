@@ -12,7 +12,7 @@ await runWorkload('react', async (window, initial, onClick) => {
   let rowsDisposed = 0
   let unexpectedClicks = 0
   const content = createRef<NativeRef>()
-  const listener = () => {
+  let listener: () => void = () => {
     if (onClick) onClick()
     else unexpectedClicks++
   }
@@ -45,7 +45,9 @@ await runWorkload('react', async (window, initial, onClick) => {
     )
   }
 
-  const view = render(<App />, window)
+  let view = render(<App />, window)
+  let disposedMutations: typeof view.diagnostics.mutations | undefined
+  let disposal: Promise<void> | undefined
   await view.ready
   if (!content.current) throw new Error('React content ref was not attached at native readiness')
   return {
@@ -57,10 +59,19 @@ await runWorkload('react', async (window, initial, onClick) => {
       setRows(rows)
       return view.flush()
     },
-    dispose: () => view.dispose(),
+    dispose() {
+      if (!disposal)
+        disposal = (async () => {
+          await view.dispose()
+          disposedMutations = { ...view.diagnostics.mutations }
+          listener = undefined!
+          view = undefined!
+        })()
+      return disposal
+    },
     probes: [new WeakRef(view), new WeakRef(content.current), new WeakRef(listener)],
     inspect: () => ({
-      mutations: { ...view.diagnostics.mutations },
+      mutations: { ...(disposedMutations ?? view.diagnostics.mutations) },
       rowsCreated,
       rowsDisposed,
       unexpectedClicks,
