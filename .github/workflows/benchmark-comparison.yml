@@ -7,6 +7,10 @@ name: Benchmark comparison
 on:
   workflow_dispatch:
     inputs:
+      source-pairs:
+        description: Compare historical and current Linux input on one runner
+        type: boolean
+        default: false
       trials:
         description: Measured timed trials per artifact (3 to 30)
         default: '5'
@@ -53,7 +57,7 @@ concurrency:
 jobs:
   linux:
     name: Linux core/Solid/React development and AOT comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs['source-pairs'] != true)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -228,7 +232,7 @@ jobs:
   # The hosted VM's paravirtual Metal device is not a physical GPU.
   macos:
     name: macOS core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs['source-pairs'] != true)
     runs-on: macos-15
     timeout-minutes: 60
     defaults:
@@ -311,7 +315,7 @@ jobs:
   # benchmarks/comparison/windows-processes.ts. The VM has no physical GPU.
   windows:
     name: Windows core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs['source-pairs'] != true)
     runs-on: windows-2022
     timeout-minutes: 75
     defaults:
@@ -420,4 +424,76 @@ jobs:
             !${{ runner.temp }}/comparison/run/*/application.exe
           include-hidden-files: true
           if-no-files-found: error
+          retention-days: 30
+
+  linux-input-source-pairs:
+    name: Historical and current native input pairs
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs['source-pairs'] == true && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d67794d1bde2eeb3621f2cd1f96d1379ea87a400
+          path: .input-base
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 841ea02653a54ea7a3e2ccdc80dbac6520e3b686
+          path: .input-current
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+      - uses: ./.github/actions/linux-native-prerequisites
+      - name: Verify sources and build two independent release hosts and AOT clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C .input-base rev-parse HEAD)" = d67794d1bde2eeb3621f2cd1f96d1379ea87a400
+          test "$(git -C .input-current rev-parse HEAD)" = 841ea02653a54ea7a3e2ccdc80dbac6520e3b686
+          cmp .input-base/benchmarks/solid/direct.ts .input-current/benchmarks/solid/direct.ts
+          cmp .input-base/rust-toolchain.toml .input-current/rust-toolchain.toml
+          for variant in base current; do
+            source_dir="$GITHUB_WORKSPACE/.input-$variant"
+            out="$RUNNER_TEMP/input-source-build/$variant"
+            mkdir -p "$out"
+            (cd "$source_dir"; bun install --frozen-lockfile --ignore-scripts)
+            CARGO_TARGET_DIR="$out/target" cargo build --manifest-path "$source_dir/Cargo.toml" --locked --release -p bun-native-host --bin bun-native-host
+            (cd "$source_dir"; bun scripts/solid-build.ts "$source_dir/benchmarks/solid/direct.ts" "$out/module")
+            bun --no-install compile --no-script --production --explain=json "$out/module/application.js" --outfile "$out/app" > "$out/compile.json"
+            INPUT_BINARY="$out/app" bun -e '
+              import { inspectBunExecutable } from "./scripts/native/inspect.ts";
+              import { inspectBunRuntime } from "./scripts/native/inspect-runtime.ts";
+              const graph = inspectBunExecutable(process.env.INPUT_BINARY!);
+              const runtime = inspectBunRuntime(process.env.INPUT_BINARY!);
+              if (!graph.hasCompiledProgram || runtime.jit !== "unused") throw new Error("Client is not qualified AOT");
+              console.log(JSON.stringify({graph,runtime}, null, 2));
+            ' > "$out/inspection.json"
+            sha256sum "$out/target/release/bun-native-host" "$out/app" "$out/module/application.js" > "$out/hashes.txt"
+          done
+      - name: Collect alternating native input observations
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/input-source-build"
+          bash scripts/quality/native-x11-session.sh "$RUNNER_TEMP/input-source-session" -- \
+            python3 benchmarks/comparison/linux-input-source-pairs.py \
+              --base-source "$GITHUB_WORKSPACE/.input-base" --candidate-source "$GITHUB_WORKSPACE/.input-current" \
+              --base-host "$root/base/target/release/bun-native-host" --candidate-host "$root/current/target/release/bun-native-host" \
+              --base-aot "$root/base/app" --candidate-aot "$root/current/app" \
+              --bun "$(command -v bun)" --output "$RUNNER_TEMP/input-source-pairs"
+      - name: Retain source identities, observations and failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-input-source-pairs
+          path: |
+            ${{ runner.temp }}/input-source-pairs/
+            ${{ runner.temp }}/input-source-session/
+            ${{ runner.temp }}/input-source-build/*/compile.json
+            ${{ runner.temp }}/input-source-build/*/inspection.json
+            ${{ runner.temp }}/input-source-build/*/hashes.txt
+          if-no-files-found: warn
           retention-days: 30
