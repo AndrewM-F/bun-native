@@ -63,7 +63,10 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--development-controls-only", action="store_true")
+    parser.add_argument("--collector-trace", action="store_true")
     args = parser.parse_args()
+    if args.collector_trace and not args.development_controls_only:
+        raise ValueError("Collector tracing is limited to the development runtime")
     if not 1 <= args.pairs <= 5:
         raise ValueError("pairs must be in 1..5")
     if any(name.startswith("BUN_JSC_") for name in os.environ):
@@ -90,6 +93,7 @@ def main():
         "aotReferenceRuntime": runtimes["baseline"]
         if args.development_controls_only
         else None,
+        "collectorTrace": args.collector_trace,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     records = []
@@ -115,6 +119,10 @@ def main():
                 if args.development_controls_only
                 else None,
             )
+            env.pop("BN_COLLECTOR_TRACE_DIR", None)
+            env.pop("BN_COLLECTOR_TRACE_REQUESTED", None)
+            if args.collector_trace and variant == "candidate":
+                env["BN_COLLECTOR_TRACE_REQUESTED"] = "1"
             record = {
                 "trial": trial,
                 "variant": variant,
@@ -131,6 +139,7 @@ def main():
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         timeout=900,
+                        check=False,
                     )
                 record["exit"] = process.returncode
                 observations = json.loads((destination / "results.json").read_text())

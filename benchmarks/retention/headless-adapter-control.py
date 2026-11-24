@@ -10,9 +10,44 @@ import os
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
+
+
+def inspect_collector_traces(directory):
+    files = sorted(directory.glob("bn-gc-*.bin"))
+    if not files:
+        raise ValueError("Instrumented development process emitted no collector traces")
+    results = []
+    for path in files:
+        with path.open("rb") as stream:
+            header = stream.read(40)
+        if len(header) != 40:
+            raise ValueError("Truncated collector trace header")
+        magic, version, stride, epoch, attempted, written = struct.unpack(
+            "<8sIIQQQ", header
+        )
+        if (
+            magic != b"BNGCTRC1"
+            or version != 1
+            or stride != 24
+            or not epoch
+            or not written
+            or attempted != written
+            or path.stat().st_size != 40 + written * stride
+        ):
+            raise ValueError("Invalid or overflowed collector trace")
+        results.append(
+            {
+                "file": path.name,
+                "epoch": epoch,
+                "records": written,
+                "sha256": digest(path),
+            }
+        )
+    return results
 
 
 def digest(path):
@@ -130,6 +165,7 @@ def main():
     runtime = resolve_runtime(sys.argv[7] if len(sys.argv) > 7 else "bun", revision)
     narrow_scan = narrow_scan_setting(os.environ)
     require_narrow_dump = os.environ.get("BUN_NATIVE_DIAG_NARROW_DUMP") == "1"
+    trace_requested = os.environ.get("BN_COLLECTOR_TRACE_REQUESTED") == "1"
     output.mkdir(parents=True, exist_ok=False)
     plan = {
         "revision": revision,
@@ -149,6 +185,7 @@ def main():
         "aot": "1000 iterations, 1000 rotations, 100 mounts, 32 rows",
         "narrowReferenceScanEnv": narrow_scan,
         "requireNarrowOptionDump": require_narrow_dump,
+        "collectorTraceRequested": trace_requested,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     results = []
@@ -159,6 +196,12 @@ def main():
             report = output / f"{trial:02}-{mode}.json"
             env = os.environ.copy()
             env.pop("BUN_NATIVE_DIAG_NARROW_DUMP", None)
+            env.pop("BN_COLLECTOR_TRACE_REQUESTED", None)
+            env.pop("BN_COLLECTOR_TRACE_DIR", None)
+            trace_directory = output / f"{trial:02}-{mode}-collector-trace"
+            if trace_requested and mode == "development":
+                trace_directory.mkdir(exist_ok=False)
+                env["BN_COLLECTOR_TRACE_DIR"] = str(trace_directory.resolve())
             if require_narrow_dump:
                 env["BUN_JSC_dumpOptions"] = "3"
             for key in (
@@ -211,6 +254,11 @@ def main():
                 effective_scan = (
                     effective_narrow_scan(child.stderr) if require_narrow_dump else None
                 )
+                traces = (
+                    inspect_collector_traces(trace_directory)
+                    if trace_requested and mode == "development"
+                    else None
+                )
                 valid = bool(
                     raw
                     and valid_report(
@@ -230,6 +278,7 @@ def main():
                     "retention": observation,
                     "cleanup": cleanup,
                     "effectiveNarrowReferenceScan": effective_scan,
+                    "collectorTraces": traces,
                 }
             except (
                 OSError,

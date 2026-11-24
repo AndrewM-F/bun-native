@@ -1,6 +1,8 @@
 """Controls must reject invalid or ineffective narrow-scan settings."""
 
 import importlib.util
+import struct
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,6 +17,26 @@ SPEC.loader.exec_module(CONTROL)
 
 
 class RetentionScanDiagnosticTests(unittest.TestCase):
+    def test_collector_trace_rejects_missing_overflow_and_truncation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            with self.assertRaises(ValueError):
+                CONTROL.inspect_collector_traces(directory)
+            trace = directory / "bn-gc-1-1.bin"
+            header = lambda attempted, written: struct.pack(
+                "<8sIIQQQ", b"BNGCTRC1", 1, 24, 1, attempted, written
+            )
+            trace.write_bytes(header(2, 1) + bytes(24))
+            with self.assertRaises(ValueError):
+                CONTROL.inspect_collector_traces(directory)
+            trace.write_bytes(header(1, 1) + bytes(23))
+            with self.assertRaises(ValueError):
+                CONTROL.inspect_collector_traces(directory)
+            trace.write_bytes(header(1, 1) + bytes(24))
+            self.assertEqual(
+                CONTROL.inspect_collector_traces(directory)[0]["records"], 1
+            )
+
     def test_setting_and_effective_dump(self):
         self.assertIsNone(CONTROL.narrow_scan_setting({}))
         self.assertEqual(
