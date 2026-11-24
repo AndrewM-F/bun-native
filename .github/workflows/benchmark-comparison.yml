@@ -24,6 +24,10 @@ on:
         description: Hosted visible fixture (off, 0 for smoke, or 3 to 20 pairs)
         type: string
         default: 'off'
+      visible-controls:
+        description: Same-binary visible input control pairs per system (3 to 20)
+        type: string
+        default: '3'
       visible-stream:
         description: Qualify the optional capture stream in smoke mode only
         type: boolean
@@ -442,6 +446,7 @@ jobs:
     env:
       STREAM_CONTROL: ${{ inputs['visible-stream'] }}
       VISIBLE_PAIRS: ${{ inputs['visible-pairs'] }}
+      VISIBLE_CONTROLS: ${{ inputs['visible-controls'] }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -449,6 +454,7 @@ jobs:
       - name: Prepare isolated fixture and evidence directory
         run: |
           [[ "$VISIBLE_PAIRS" =~ ^(0|[3-9]|1[0-9]|20)$ ]] || { echo 'visible-pairs must be 0 or 3 to 20' >&2; exit 1; }
+          [[ "$VISIBLE_CONTROLS" =~ ^([3-9]|1[0-9]|20)$ ]] || { echo 'visible-controls must be 3 to 20' >&2; exit 1; }
           if [[ "$STREAM_CONTROL" == 'true' && "$VISIBLE_PAIRS" != '0' ]]; then
             echo 'Stream qualification is a separate smoke-only run' >&2; exit 1
           fi
@@ -547,7 +553,7 @@ jobs:
             --output "$RUNNER_TEMP/eb-smoke/pairs" \
             --helper "$RUNNER_TEMP/eb-smoke/window-helper" \
             --ocr "$RUNNER_TEMP/eb-smoke/text-helper" \
-            --pairs "$VISIBLE_PAIRS"
+            --pairs "$VISIBLE_PAIRS" --controls "$VISIBLE_CONTROLS"
       - name: Retain smoke evidence, including failures
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -20,6 +20,7 @@ const { values } = parseArgs({
     helper: { type: 'string' },
     ocr: { type: 'string' },
     pairs: { type: 'string', default: '10' },
+    controls: { type: 'string', default: '3' },
   },
   strict: true,
 })
@@ -44,7 +45,8 @@ const helper = owned(values.helper, true)
 const ocr = owned(values.ocr, true)
 const output = owned(values.output, false)
 assert(!existsSync(output), 'Output already exists')
-const plan = visiblePairsPlan(Number(values.pairs))
+const controlPairs = Number(values.controls)
+const plan = visiblePairsPlan(Number(values.pairs), controlPairs)
 mkdirSync(output)
 writeFileSync(join(output, 'plan.json'), JSON.stringify(plan, null, 2) + '\n')
 type Observation = {
@@ -121,13 +123,15 @@ if (!failure) {
       const controls = observations.filter(
         (item) => item.trial.phase === 'control' && item.trial.variant === variant
       )
-      const differences = [0, 1, 2].map((pair) => {
+      const differences = Array.from({ length: controlPairs }, (_, pair) => {
         const items = controls.filter((item) => item.trial.pair === pair)
+        assert.equal(items.length, 2, `Incomplete ${variant} control pair ${pair}`)
         return elapsed(items[1]!) - elapsed(items[0]!)
       })
       summaries[`${metric}-${variant}ControlDifferencesMs`] = {
         raw: differences,
         distribution: describe(differences),
+        interval: bootstrapMedian(differences),
       }
     }
     const differences = Array.from({ length: Number(values.pairs) }, (_, pair) => {
