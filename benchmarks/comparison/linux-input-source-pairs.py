@@ -289,6 +289,10 @@ def main():
                     json.dumps(records, indent=2) + "\n"
                 )
                 print(json.dumps(record), flush=True)
+                if not record["valid"]:
+                    raise SystemExit(
+                        "Launch failed; retained evidence and stopped the comparison"
+                    )
     if not all(row["valid"] for row in records):
         raise SystemExit("At least one launch failed; all observations were retained")
     summaries = {}
