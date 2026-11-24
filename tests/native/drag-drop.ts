@@ -413,11 +413,31 @@ async function qualification() {
         let recoveryMotion: unknown = null
         if (lateEntryMs === null) {
           try {
-            const first = await xdnd.send('move 129 150')
-            const second = await xdnd.send('move 130 150')
-            const until = performance.now() + 2_000
-            while (log.length === mark && performance.now() < until) await Bun.sleep(25)
-            recoveryMotion = { first, second, entered: log.length > mark, events: log.slice(mark) }
+            const holdUntil = performance.now() + 2_000
+            while (log.length === mark && performance.now() < holdUntil) await Bun.sleep(25)
+            const duringHold = log.length > mark
+            let first: unknown = null
+            let second: unknown = null
+            let afterFirst = false
+            if (!duringHold) {
+              first = await xdnd.send('move 129 150')
+              const firstUntil = performance.now() + 500
+              while (log.length === mark && performance.now() < firstUntil) await Bun.sleep(25)
+              afterFirst = log.length > mark
+              if (!afterFirst) {
+                second = await xdnd.send('move 130 150')
+                const secondUntil = performance.now() + 2_000
+                while (log.length === mark && performance.now() < secondUntil) await Bun.sleep(25)
+              }
+            }
+            recoveryMotion = {
+              duringHold,
+              first,
+              afterFirst,
+              second,
+              entered: log.length > mark,
+              events: log.slice(mark),
+            }
           } catch (motionError) {
             recoveryMotion = { error: String(motionError) }
           }

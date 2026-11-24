@@ -59,7 +59,7 @@ jobs:
     name: macOS repeated native drag qualification
     if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs['drag-repeat'] && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 120
     defaults:
       run:
         shell: pwsh
@@ -96,14 +96,14 @@ jobs:
           Get-FileHash -Algorithm SHA256 $source | Format-List | Out-File (Join-Path $root 'drag-source-sha256.txt')
           bun scripts/quality/compile-aot-entries.ts --entry drag-drop --outdir (Join-Path $root 'package') --host $hostPath
           if ($LASTEXITCODE -ne 0) { throw 'AOT fixture build or inspection failed' }
-      - name: Run eight alternating development and AOT pairs
-        timeout-minutes: 60
+      - name: Run sixteen alternating development and AOT pairs
+        timeout-minutes: 85
         run: |
           $ErrorActionPreference = 'Stop'
           $manifest = Get-Content -Raw (Join-Path $env:DRAG_REPEAT_ROOT 'package/manifest.json') | ConvertFrom-Json
           if ($manifest.application.inspection.hasCompiledProgram -ne $true -or !$manifest.application.runtimeFeatures -or $manifest.application.runtimeFeatures.jit -eq 'present') { throw 'AOT inspection failed' }
           $outcomes = @()
-          for ($trial = 0; $trial -lt 8; $trial++) {
+          for ($trial = 0; $trial -lt 16; $trial++) {
             $modes = if ($trial % 2 -eq 0) { @('development', 'aot') } else { @('aot', 'development') }
             foreach ($mode in $modes) {
               $evidence = Join-Path $env:DRAG_REPEAT_ROOT ("{0:D2}-{1}" -f $trial, $mode)
