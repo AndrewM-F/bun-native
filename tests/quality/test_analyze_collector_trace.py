@@ -51,6 +51,29 @@ class CollectorPathTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ANALYZE.trace_paths(trace, [3])
 
+    def test_scan_slots_are_reported_without_becoming_graph_edges(self):
+        with tempfile.TemporaryDirectory() as temp:
+            trace = Path(temp) / "trace.bin"
+            write_trace(
+                trace,
+                [
+                    (100, 1, 1, 0),
+                    (1, 2, 3, 0),
+                    (2, 3, 2, 0),
+                    (120, 1, 4, 0),
+                    (100, 200, 5, 0),
+                ],
+            )
+            result = ANALYZE.trace_paths(trace, [3, 200], scan_slots=True)
+            root = result["paths"][0]["path"][0]
+            self.assertEqual(
+                root["candidateSlots"],
+                [{"slot": "0x78", "candidateSpans": [["0x64", "0xc8"]]}],
+            )
+            self.assertIsNone(result["paths"][1]["path"])
+            with self.assertRaises(ValueError):
+                ANALYZE.trace_paths(trace, [3])
+
 
 if __name__ == "__main__":
     unittest.main()

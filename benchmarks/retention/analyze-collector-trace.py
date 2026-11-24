@@ -1,8 +1,9 @@
 """Find paths recorded within one bounded GC trace.
 
 Target addresses can come from a later snapshot and may have been reused. Trace
-edges are incomplete and lack VM and scanned-slot identity. A missing path is
-not proof of absence, and even a path does not establish a production root.
+edges are incomplete and lack VM or thread identity. Slot tracing, when present,
+records candidates but does not attribute them to threads. A missing path is not
+proof of absence, and even a path does not establish a production root.
 """
 
 import argparse
@@ -12,7 +13,7 @@ import struct
 from pathlib import Path
 
 
-def trace_paths(path, targets):
+def trace_paths(path, targets, scan_slots=False):
     data = path.read_bytes()
     if len(data) < 40:
         raise ValueError("Truncated trace header")
@@ -29,18 +30,32 @@ def trace_paths(path, targets):
         raise ValueError("Invalid or overflowed trace")
     roots = set()
     incoming = collections.defaultdict(set)
+    slots = collections.defaultdict(set)
+    spans = set()
     kinds = set()
     for source, target, kind, reserved in struct.iter_unpack(
         "<QQII", memoryview(data)[40:]
     ):
-        if not target or kind not in (1, 2, 3) or reserved:
+        if (
+            not target
+            or kind not in ({1, 2, 3, 4, 5} if scan_slots else {1, 2, 3})
+            or reserved
+        ):
             raise ValueError("Malformed trace record")
         kinds.add(kind)
         if kind == 1:
             roots.add(target)
-        elif source:
+        elif kind in (2, 3) and source:
             incoming[target].add((source, kind))
-    if kinds != {1, 2, 3}:
+        elif kind == 4:
+            if not source:
+                raise ValueError("Missing scan slot")
+            slots[target].add(source)
+        elif kind == 5:
+            if not source or source >= target:
+                raise ValueError("Invalid scanned span")
+            spans.add((source, target))
+    if kinds != ({1, 2, 3, 4, 5} if scan_slots else {1, 2, 3}):
         raise ValueError("Trace lacks one or more requested event kinds")
     paths = []
     for target in targets:
@@ -60,7 +75,20 @@ def trace_paths(path, targets):
                     queue.append(parent)
         path_records = None
         if found is not None:
-            path_records = [{"address": hex(found), "event": "conservative-match"}]
+            root = {"address": hex(found), "event": "conservative-match"}
+            if scan_slots:
+                root["candidateSlots"] = [
+                    {
+                        "slot": hex(slot),
+                        "candidateSpans": [
+                            [hex(start), hex(end)]
+                            for start, end in sorted(spans)
+                            if start <= slot < end
+                        ],
+                    }
+                    for slot in sorted(slots[found])
+                ]
+            path_records = [root]
             while found != target:
                 found, kind = child[found]
                 path_records.append(
@@ -77,8 +105,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path)
     parser.add_argument("target", nargs="+", type=lambda value: int(value, 0))
+    parser.add_argument("--scan-slots", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(trace_paths(args.trace, args.target), indent=2))
+    print(
+        json.dumps(
+            trace_paths(args.trace, args.target, scan_slots=args.scan_slots), indent=2
+        )
+    )
 
 
 if __name__ == "__main__":

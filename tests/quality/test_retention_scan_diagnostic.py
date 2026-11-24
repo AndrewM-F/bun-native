@@ -26,6 +26,22 @@ class RetentionScanDiagnosticTests(unittest.TestCase):
             header = lambda attempted, written: struct.pack(
                 "<8sIIQQQ", b"BNGCTRC1", 1, 24, 1, attempted, written
             )
+            with self.assertRaises(ValueError):
+                CONTROL.inspect_collector_traces(
+                    directory, normal_edges=True, scan_slots=True
+                )
+            trace.write_bytes(
+                header(5, 5)
+                + b"".join(struct.pack("<QQII", 1, 2, kind, 0) for kind in range(1, 6))
+            )
+            self.assertEqual(
+                CONTROL.inspect_collector_traces(
+                    directory, normal_edges=True, scan_slots=True
+                )[0]["records"],
+                5,
+            )
+            with self.assertRaises(ValueError):
+                CONTROL.inspect_collector_traces(directory, normal_edges=True)
             trace.write_bytes(header(2, 1) + bytes(24))
             with self.assertRaises(ValueError):
                 CONTROL.inspect_collector_traces(directory)
