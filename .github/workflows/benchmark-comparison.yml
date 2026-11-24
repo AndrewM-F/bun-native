@@ -17,6 +17,7 @@ on:
             'batch-release',
             'listener',
             'safe-listener',
+            'core-ownership',
             'fixture-core-matrix',
             'native-fixture',
             'native-safe-fixture',
@@ -1161,7 +1162,7 @@ jobs:
 
   windows-listener-control:
     name: Windows listener retention control
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && (inputs.retention-diagnostic == 'listener' || inputs.retention-diagnostic == 'safe-listener' || inputs.retention-diagnostic == 'shutdown' || inputs.retention-diagnostic == 'first-observation') && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["listener", "safe-listener", "core-ownership", "shutdown", "first-observation"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 45
     defaults:
@@ -1187,7 +1188,11 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP 'listener-retention-control'
           $runtime = (Get-Command bun -CommandType Application).Source
           $kind = $env:RETENTION_CONTROL_KIND
-          python benchmarks/retention/react-dispatch-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'results') 3 $kind $runtime
+          if ($kind -eq 'core-ownership') {
+            python benchmarks/retention/core-ownership-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'results')
+          } else {
+            python benchmarks/retention/react-dispatch-control.py (Join-Path $root 'peer.exe') (Join-Path $root 'results') 3 $kind $runtime
+          }
           if ($LASTEXITCODE -ne 0) { throw 'A retention control was invalid' }
       - name: Retain observations and failures
         if: ${{ always() }}
