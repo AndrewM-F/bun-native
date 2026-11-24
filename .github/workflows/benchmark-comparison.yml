@@ -1579,9 +1579,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
         run: |
-          if ($env:RUNTIME_BUILD_RUN -ne '45407828512') { throw 'Unexpected native trim build run' }
+          if ($env:RUNTIME_BUILD_RUN -ne '45431349723') { throw 'Unexpected native trim build run' }
           $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '74a096e6553359178e80e27c850408bf8bb04c87' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected native trim build identity' }
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne 'c5607760ae153b2d71211bb949f34c0252a2c25f' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected native trim build identity' }
           $root = Join-Path $env:RUNNER_TEMP 'native-trim-comparison'
           New-Item -ItemType Directory $root | Out-Null
           $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'build-run.json')
@@ -1596,7 +1596,7 @@ jobs:
           $p = Get-Content -Raw $poll[0].FullName | ConvertFrom-Json
           $b = Get-Content -Raw $build[0].FullName | ConvertFrom-Json
           $timer = $b.'webkit/Source/WTF/wtf/bun/RunLoopBun.cpp'
-          if ($p.mode -ne 'clear' -or $t.coffOriginalSha256 -ne '0c3456653c73da79e97ee9b3481ee0e280420ed0ed87960af3768d6af1e50052' -or $t.coffAdjustedSha256 -ne '7e0c4a3ffe0301d84104e841c3d1718ffaaa561524a71d279cce2194dea20ebd' -or $t.originalSha256 -ne '250214955aa10df16dbd06a9858948e8b1fb42e201e70f90af7408a605114826' -or $t.adjustedSha256 -ne '8a6357783e12211117f3bb784a197ce8e1e593ecc3b3a463888a5b6504f083b8' -or $p.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $p.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $p.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $p.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95' -or $timer.adjustedSha256 -ne 'e081b917bdeaf5ad3facba1b973997ce1e70051d014abd69def12f4ae896610f') { throw 'Native trim source identity mismatch' }
+          if ($p.mode -ne 'clear' -or $t.objectsOriginalSha256 -ne 'f911f5a3bd16e7fe0e1c86ec523f651483e342a103abc0f8fbcc2e20b6498619' -or $t.objectsAdjustedSha256 -ne 'e91137101fcd72ff651e1f5bebddfcc77a9f30c9fc7e9c09e92d12bb2067d1c6' -or $t.coffOriginalSha256 -ne '0c3456653c73da79e97ee9b3481ee0e280420ed0ed87960af3768d6af1e50052' -or $t.coffAdjustedSha256 -ne '7e0c4a3ffe0301d84104e841c3d1718ffaaa561524a71d279cce2194dea20ebd' -or $t.originalSha256 -ne '250214955aa10df16dbd06a9858948e8b1fb42e201e70f90af7408a605114826' -or $t.adjustedSha256 -ne '8a6357783e12211117f3bb784a197ce8e1e593ecc3b3a463888a5b6504f083b8' -or $p.bunLibuvSpecOriginalSha256 -ne '41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0' -or $p.bunLibuvSpecAdjustedSha256 -ne '4ad31161c606ebec688d669d45c10088cd53269a0547fb0b7651d56dd9af7fc7' -or $p.libuvCommit -ne '8023581113b276e7c1aee3f82da57ca0893faab1' -or $p.diagnosticPatchSha256 -ne 'e7d664f40ff4fad76475fb9284c7e46ce0e3f25b72517dc52c38f59384cb0c95' -or $timer.adjustedSha256 -ne 'e081b917bdeaf5ad3facba1b973997ce1e70051d014abd69def12f4ae896610f') { throw 'Native trim source identity mismatch' }
           "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
       - name: Compare inspected development and AOT controls
         run: |
