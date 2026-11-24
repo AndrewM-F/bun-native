@@ -26,6 +26,12 @@ class FixtureCoreMatrixTests(unittest.TestCase):
             NATIVE.digest(variant),
             "a79755f09a39f6f9363ccf6937b8a2262685b5ee405e07fd4496ad4d21867195",
         )
+        self.assertEqual(
+            NATIVE.digest(NATIVE.build_variant(original, batch, "safe-clear")),
+            "9482574a18d0d67fbe22549bc566f3a209d081637b9e190083ae8cf7cb03bec2",
+        )
+        with self.assertRaisesRegex(ValueError, "Unknown headless-qualified fixture"):
+            NATIVE.build_variant(original, batch, "unapproved")
         with self.assertRaisesRegex(ValueError, "original React fixture"):
             NATIVE.build_variant(original + b" ", batch)
         with self.assertRaisesRegex(ValueError, "batch-release candidate"):

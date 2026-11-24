@@ -19,6 +19,7 @@ on:
             'safe-listener',
             'fixture-core-matrix',
             'native-fixture',
+            'native-safe-fixture',
             'shutdown',
             'first-observation',
             'runtime-preflight',
@@ -877,7 +878,7 @@ jobs:
   # benchmarks/comparison/windows-processes.ts. The VM has no physical GPU.
   windows:
     name: Windows core/Solid/React and direct Rust GPUI comparison
-    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || inputs.retention-diagnostic == 'none' || inputs.retention-diagnostic == 'native-fixture')
+    if: vars.CI_BILLING_PAUSED == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["none", "native-fixture", "native-safe-fixture"]'), inputs.retention-diagnostic))
     runs-on: windows-2022
     timeout-minutes: 75
     defaults:
@@ -903,9 +904,12 @@ jobs:
         id: toolchain
         uses: ./.github/actions/native-toolchain
       - name: Install the isolated native fixture diagnostic
-        if: github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'native-fixture'
+        if: github.event_name == 'workflow_dispatch' && contains(fromJSON('["native-fixture", "native-safe-fixture"]'), inputs.retention-diagnostic)
+        env:
+          RETENTION_DIAGNOSTIC: ${{ inputs.retention-diagnostic }}
         run: |
-          python benchmarks/retention/prepare-native-fixture.py $env:COMPARISON
+          $fixture = if ($env:RETENTION_DIAGNOSTIC -eq 'native-safe-fixture') { 'safe-clear' } else { 'clear-view-listener' }
+          python benchmarks/retention/prepare-native-fixture.py $env:COMPARISON $fixture
           if ($LASTEXITCODE -ne 0) { throw 'Native fixture diagnostic preparation failed' }
       - name: Locate the installed Windows SDK shader compiler
         run: |
@@ -943,7 +947,7 @@ jobs:
             --host (Join-Path $env:GITHUB_WORKSPACE 'target/release/bun-native-host.exe') --host-profile release `
             --output (Join-Path $env:COMPARISON 'run') --trials $env:TRIALS --input-trials 0
           if ($LASTEXITCODE -ne 0) { throw "The comparison exited $LASTEXITCODE" }
-          if ($env:RETENTION_DIAGNOSTIC -eq 'native-fixture') {
+          if ($env:RETENTION_DIAGNOSTIC -in @('native-fixture', 'native-safe-fixture')) {
             $reportPath = Join-Path $env:COMPARISON 'run/comparison.json'
             if (!(Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'The diagnostic report is missing' }
             $report = Get-Content -Raw -LiteralPath $reportPath | ConvertFrom-Json
@@ -993,7 +997,7 @@ jobs:
         timeout-minutes: 3
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ inputs.retention-diagnostic == 'native-fixture' && format('native-fixture-diagnostic-windows-{0}', runner.arch) || format('benchmark-comparison-windows-{0}', runner.arch) }}
+          name: ${{ contains(fromJSON('["native-fixture", "native-safe-fixture"]'), inputs.retention-diagnostic) && format('{0}-diagnostic-windows-{1}', inputs.retention-diagnostic, runner.arch) || format('benchmark-comparison-windows-{0}', runner.arch) }}
           path: |
             ${{ runner.temp }}/comparison/
             !${{ runner.temp }}/comparison/run/*/application.exe
@@ -1001,7 +1005,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Restore the original fixture in the isolated checkout
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'native-fixture' && env.COMPARISON != '' }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && contains(fromJSON('["native-fixture", "native-safe-fixture"]'), inputs.retention-diagnostic) && env.COMPARISON != '' }}
         run: |
           $original = Join-Path $env:COMPARISON 'original-react.tsx.txt'
           if (Test-Path -LiteralPath $original) {

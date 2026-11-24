@@ -12,7 +12,7 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def build_variant(original, batch):
+def build_variant(original, batch, name="clear-view-listener"):
     if digest(original) != "ce636a55012d21d54cecc89ad0664d76d3ef9fc0a83211ca27bd301d350745a1":
         raise ValueError("Unexpected original React fixture")
     if digest(batch) != "1390922840cca0cd0f562a8a7a281e2b24cf21278eb0c4ce928a464efecf1601":
@@ -24,8 +24,14 @@ def build_variant(original, batch):
         raise ValueError("Cannot load the fixture control")
     control = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(control)
-    variant = control.listener_source(original.decode("utf-8"), "clear-view-listener").encode()
-    if digest(variant) != "a79755f09a39f6f9363ccf6937b8a2262685b5ee405e07fd4496ad4d21867195":
+    expected = {
+        "clear-view-listener": "a79755f09a39f6f9363ccf6937b8a2262685b5ee405e07fd4496ad4d21867195",
+        "safe-clear": "9482574a18d0d67fbe22549bc566f3a209d081637b9e190083ae8cf7cb03bec2",
+    }
+    if name not in expected:
+        raise ValueError("Unknown headless-qualified fixture")
+    variant = control.listener_source(original.decode("utf-8"), name).encode()
+    if digest(variant) != expected[name]:
         raise ValueError("Fixture differs from the successful headless variant")
     return variant
 
@@ -39,12 +45,14 @@ def main():
     source = Path("benchmarks/solid/react.tsx")
     original = source.read_bytes()
     batch = Path("packages/core/src/batches.ts").read_bytes()
-    variant = build_variant(original, batch)
+    name = sys.argv[2] if len(sys.argv) > 2 else "clear-view-listener"
+    variant = build_variant(original, batch, name)
     (root / "original-react.tsx.txt").write_bytes(original)
     (root / "candidate-react.tsx.txt").write_bytes(variant)
     plan = {
         "originalFixtureSha256": digest(original),
         "candidateFixtureSha256": digest(variant),
+        "fixtureVariant": name,
         "batchCandidateSha256": digest(batch),
         "scope": "Altered fixture and batch candidate; real native diagnostic, not the original benchmark.",
     }
