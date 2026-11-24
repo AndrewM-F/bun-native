@@ -1,6 +1,7 @@
 """Listener controls retain the workload and require a live pinned listener."""
 
 import importlib.util
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -47,6 +48,53 @@ class ListenerRetentionControlTests(unittest.TestCase):
             self.assertTrue(CONTROL.listener_pin_valid(raw, mode))
             raw["retentionObservation"]["stillReachable"] = []
             self.assertFalse(CONTROL.listener_pin_valid(raw, mode))
+
+    def test_cached_disposal_controls_preserve_both_positive_pins(self):
+        source = (ROOT / "benchmarks/solid/react.tsx").read_text()
+        baseline = CONTROL.listener_source(source, "safe-baseline")
+        cleared = CONTROL.listener_source(source, "safe-clear")
+        self.assertIn("if (!disposal) disposal =", baseline)
+        self.assertNotIn("listener = undefined; view = undefined!;", baseline)
+        self.assertIn("listener = undefined; view = undefined!;", cleared)
+        for variant, target in (
+            ("safe-pin-listener", "listener"),
+            ("safe-pin-root", "view"),
+        ):
+            pinned = CONTROL.listener_source(source, variant)
+            self.assertIn(f"__listenerDiagnosticPin = {target}", pinned)
+            self.assertIn("listener = undefined; view = undefined!;", pinned)
+
+    def test_cached_disposal_is_repeatable_and_preserves_failures(self):
+        source = (ROOT / "benchmarks/solid/react.tsx").read_text()
+        generated = CONTROL.listener_source(source, "safe-clear")
+        method = next(line.strip() for line in generated.splitlines() if line.strip().startswith("dispose()"))
+        method = method.removesuffix(",").replace("view = undefined!;", "view = undefined;")
+        script = """
+const assert = require('node:assert/strict');
+async function check(fail) {
+  let calls = 0, listener = () => {}, disposal, disposedMutations;
+  const original = { diagnostics: { mutations: { set: 2 } },
+    dispose() { calls++; return fail ? Promise.reject(new Error('failed')) : Promise.resolve(); } };
+  let view = original;
+  const fixture = { METHOD };
+  const first = fixture.dispose(), second = fixture.dispose();
+  assert.equal(first, second);
+  if (fail) {
+    await assert.rejects(first, /failed/);
+    assert.equal(view, original);
+    assert.equal(typeof listener, 'function');
+  } else {
+    await first;
+    assert.equal(view, undefined);
+    assert.equal(listener, undefined);
+    assert.deepEqual(disposedMutations, { set: 2 });
+  }
+  assert.equal(fixture.dispose(), first);
+  assert.equal(calls, 1);
+}
+check(false).then(() => check(true)).catch(error => { console.error(error); process.exitCode = 1; });
+""".replace("METHOD", method)
+        subprocess.run(["node", "-e", script], check=True, timeout=10)
 
     def test_shutdown_pin_must_remain_observable_at_all_three_checkpoints(self):
         for mode, index in (("development", 3), ("aot", 297)):

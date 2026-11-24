@@ -33,6 +33,10 @@ def listener_source(source, variant):
         "clear-view-listener",
         "pin-listener",
         "pin-root",
+        "safe-baseline",
+        "safe-clear",
+        "safe-pin-listener",
+        "safe-pin-root",
     ):
         raise ValueError("Unknown listener control variant")
     source = replace_once(
@@ -50,9 +54,9 @@ def listener_source(source, variant):
         "      mutations: { ...view.diagnostics.mutations },\n",
         "      mutations: { ...(disposedMutations ?? view.diagnostics.mutations) },\n",
     )
-    if variant in ("pin-listener", "pin-root"):
+    if variant in ("pin-listener", "pin-root", "safe-pin-listener", "safe-pin-root"):
         marker = "  if (!content.current) throw new Error('React content ref was not attached at native readiness')\n"
-        pin = "listener" if variant == "pin-listener" else "view"
+        pin = "listener" if variant.endswith("pin-listener") else "view"
         source = replace_once(
             source,
             marker,
@@ -66,7 +70,22 @@ def listener_source(source, variant):
         "clear-view-listener": " listener = undefined; view = undefined!;",
         "pin-listener": "",
         "pin-root": "",
+        "safe-baseline": "",
+        "safe-clear": " listener = undefined; view = undefined!;",
+        "safe-pin-listener": " listener = undefined; view = undefined!;",
+        "safe-pin-root": " listener = undefined; view = undefined!;",
     }[variant]
+    if variant.startswith("safe-"):
+        source = replace_once(
+            source,
+            "  let disposedMutations: typeof view.diagnostics.mutations | undefined\n",
+            "  let disposedMutations: typeof view.diagnostics.mutations | undefined\n  let disposal: Promise<void> | undefined\n",
+        )
+        return replace_once(
+            source,
+            MARKER,
+            f"dispose() {{ if (!disposal) disposal = (async () => {{ await view.dispose(); disposedMutations = {{ ...view.diagnostics.mutations }};{action} }})(); return disposal; }},",
+        )
     return replace_once(
         source,
         MARKER,
@@ -224,7 +243,7 @@ def main():
     # AOT reference with the distributed compiler. The runtime under test is
     # still passed to the headless development workload below.
     compiler = os.environ.get("CONTROL_AOT_REFERENCE_COMPILER") or runtime or "bun"
-    if kind not in ("dispatch", "shutdown", "cycle", "first-observation", "listener"):
+    if kind not in ("dispatch", "shutdown", "cycle", "first-observation", "listener", "safe-listener"):
         raise ValueError("Unknown control kind")
     if not 1 <= trials <= 10:
         raise ValueError("Trial count must be in 1..10")
@@ -253,6 +272,8 @@ def main():
             "pin-root",
         )
         if kind == "listener"
+        else ("safe-baseline", "safe-clear", "safe-pin-listener", "safe-pin-root")
+        if kind == "safe-listener"
         else ("baseline", "clear")
     )
     workloads = {
@@ -274,7 +295,7 @@ def main():
             )
             if kind in ("shutdown", "cycle", "first-observation")
             else listener_source(source, name)
-            if kind == "listener"
+            if kind in ("listener", "safe-listener")
             else variant_source(source, name == "clear")
         )
         for name in variants
@@ -299,7 +320,7 @@ def main():
         },
         "instrumentedWorkloadSha256": (
             {name: digest(text.encode()) for name, text in workloads.items()}
-            if kind in ("cycle", "first-observation")
+            if kind in ("cycle", "first-observation", "listener", "safe-listener")
             else digest(workloads["baseline"].encode())
             if kind == "shutdown"
             else None
@@ -318,6 +339,8 @@ def main():
             if kind == "cycle"
             else "Omit-first skips only the diagnostic first dereference; pinned variants retain the latest render root globally."
             if kind == "first-observation"
+            else "All variants cache the disposal promise; clear releases the listener and view, and pins deliberately retain each target."
+            if kind == "safe-listener"
             else "The variants clear setters or the listener after disposal, or intentionally pin the listener as a positive control."
             if kind == "listener"
             else "Both use the same async dispose wrapper; clear additionally assigns undefined to both React hook setters after disposal."
@@ -433,13 +456,13 @@ def main():
                             (child_output / f"00-{record['mode']}.json").read_text()
                         )
                         valid = valid and cycle_pin_valid(raw, record["mode"])
-                if valid and kind == "listener" and variant == "pin-listener":
+                if valid and kind in ("listener", "safe-listener") and variant.endswith("pin-listener"):
                     for record in records:
                         raw = json.loads(
                             (child_output / f"00-{record['mode']}.json").read_text()
                         )
                         valid = valid and listener_pin_valid(raw, record["mode"])
-                if valid and kind == "listener" and variant == "pin-root":
+                if valid and kind in ("listener", "safe-listener") and variant.endswith("pin-root"):
                     for record in records:
                         raw = json.loads(
                             (child_output / f"00-{record['mode']}.json").read_text()
