@@ -102,6 +102,19 @@ class CollectorTraceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             INSTRUMENT.transform(roots, visitor, bindings, scan_slots=True)
 
+    def test_machine_scan_origins_require_each_pinned_call_site(self):
+        source = (
+            b"WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN\n"
+            b"    conservativeRoots.add(conductingMutatorState.stackTop, conductingMutatorState.stackOrigin, jitStubRoutines, codeBlocks);\n"
+            b"        conservativeRoots.add(registersBegin, registersEnd, jitStubRoutines, codeBlocks);\n"
+            b"    conservativeRoots.add(buffer, static_cast<char*>(buffer) + size, jitStubRoutines, codeBlocks);\n"
+        )
+        transformed = INSTRUMENT.transform_machine(source)
+        for kind in (6, 7, 8):
+            self.assertIn(f"BNCollectorTraceRecord({kind},".encode(), transformed)
+        with self.assertRaises(ValueError):
+            INSTRUMENT.transform_machine(transformed)
+
     @unittest.skipIf(
         os.name == "nt" or not shutil.which("clang++"),
         "requires clang++ and POSIX environment",

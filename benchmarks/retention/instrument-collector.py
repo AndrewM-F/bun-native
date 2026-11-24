@@ -23,6 +23,47 @@ def replace_once(data, before, after):
     return data.replace(before, after)
 
 
+def transform_machine(data):
+    if b"BNCollectorTraceRecord(" in data:
+        raise ValueError("Machine scanner is already instrumented")
+    data = replace_once(
+        data,
+        b"WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN\n",
+        b'extern "C" void BNCollectorTraceRecord(uint32_t, const void*, const void*);\n\nWTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN\n',
+    )
+    for kind, call, begin, end in (
+        (
+            6,
+            b"    conservativeRoots.add(conductingMutatorState.stackTop, conductingMutatorState.stackOrigin, jitStubRoutines, codeBlocks);\n",
+            b"conductingMutatorState.stackTop",
+            b"conductingMutatorState.stackOrigin",
+        ),
+        (
+            7,
+            b"        conservativeRoots.add(registersBegin, registersEnd, jitStubRoutines, codeBlocks);\n",
+            b"registersBegin",
+            b"registersEnd",
+        ),
+        (
+            8,
+            b"    conservativeRoots.add(buffer, static_cast<char*>(buffer) + size, jitStubRoutines, codeBlocks);\n",
+            b"buffer",
+            b"static_cast<char*>(buffer) + size",
+        ),
+    ):
+        record = (
+            b"    BNCollectorTraceRecord("
+            + str(kind).encode()
+            + b", "
+            + begin
+            + b", "
+            + end
+            + b");\n"
+        )
+        data = replace_once(data, call, record + call)
+    return data
+
+
 def transform(roots, visitor, bindings, normal_edges=False, scan_slots=False):
     if scan_slots and not normal_edges:
         raise ValueError("Slot tracing requires normal edges")
@@ -105,14 +146,16 @@ def main():
             "Collector instrumentation requires an isolated Windows Actions checkout"
         )
     if len(sys.argv) not in (4, 5) or (
-        len(sys.argv) == 5 and sys.argv[4] not in ("--normal-edges", "--scan-slots")
+        len(sys.argv) == 5
+        and sys.argv[4] not in ("--normal-edges", "--scan-slots", "--scan-origin")
     ):
         raise ValueError(
             "Expected bun, webkit, manifest and a known optional trace mode"
         )
     bun, webkit, manifest = (Path(x).resolve() for x in sys.argv[1:4])
     normal_edges = len(sys.argv) == 5
-    scan_slots = len(sys.argv) == 5 and sys.argv[4] == "--scan-slots"
+    scan_slots = len(sys.argv) == 5 and sys.argv[4] in ("--scan-slots", "--scan-origin")
+    scan_origin = len(sys.argv) == 5 and sys.argv[4] == "--scan-origin"
     workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
     runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if bun != workspace / "bun-source" or webkit != workspace / "webkit-source":
@@ -135,6 +178,16 @@ def main():
     adjusted = transform(*original, normal_edges=normal_edges, scan_slots=scan_slots)
     declaration_path = paths[0].with_suffix(".h")
     declaration = None
+    machine_path = paths[0].parent / "MachineStackMarker.cpp"
+    machine = None
+    if scan_origin:
+        machine = machine_path.read_bytes()
+        if (
+            sha(machine)
+            != "6964da97f8619aad952de9c76a207df5ca1e88f467c74fe7d297986b0676ed6a"
+        ):
+            raise ValueError("Machine stack marker differs from pinned revision")
+        machine = transform_machine(machine)
     if scan_slots:
         declaration = declaration_path.read_bytes()
         if (
@@ -155,7 +208,9 @@ def main():
         "originalSha256": list(map(sha, original)),
         "instrumentedSha256": list(map(sha, adjusted)),
         "headerSha256": sha(content),
-        "eventKinds": [1, 2, 3, 4, 5]
+        "eventKinds": [1, 2, 3, 4, 5, 6, 7, 8]
+        if scan_origin
+        else [1, 2, 3, 4, 5]
         if scan_slots
         else [1, 2, 3]
         if normal_edges
@@ -163,6 +218,7 @@ def main():
         "conservativeHeaderSha256": sha(declaration)
         if declaration is not None
         else None,
+        "machineStackSha256": sha(machine) if machine is not None else None,
         "scope": "Opt-in diagnostic runtime; traces conservative matches and hidden visitor calls around explicit Bun.gc. Concurrent VMs and uninstrumented paths are not attributed; missing events never prove absence and overflow invalidates the trace.",
     }
     # The checkout is ephemeral; fail on any mismatch before changing any file.
@@ -170,6 +226,8 @@ def main():
         path.write_bytes(data)
     if declaration is not None:
         declaration_path.write_bytes(declaration)
+    if machine is not None:
+        machine_path.write_bytes(machine)
     header.write_bytes(content)
     manifest.write_text(json.dumps(plan, indent=2) + "\n")
 
