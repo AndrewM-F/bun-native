@@ -35,6 +35,9 @@ baseline value" and not gated.
 ## Adopt or refresh a baseline
 
 1. Take a passed scheduled or dispatched run on `main` with at least 5 trials.
+   Dispatched runs default to five streaming trials as well; scheduled and PR
+   runs use three, so use a dispatch with at least five streaming trials when
+   adopting streaming metrics as part of a baseline.
 2. Download its `benchmark-comparison-linux-X64` artifact and copy `metrics.json`
    here as `linux-x64-<release>-<cpu>-<renderer>.json`. Two files must never
    share a label.

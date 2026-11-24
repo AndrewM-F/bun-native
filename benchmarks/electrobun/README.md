@@ -48,3 +48,21 @@ and 93 MB after its first launch. Comparison with Bun Native on the same Mac is 
 
 Not measured: per-operation latency comparable to Bun Native, CPU/GPU use, input
 latency, the CEF renderer, other platforms.
+
+## Hosted visible-input qualification (#677)
+
+The optional visible-input fixture uses a nonce-bound loopback control channel and
+one externally injected OS click. The observer checks the owned window and
+unobstructed capture region, validates the changed image and expected label, and
+requires successful cleanup. Both the native Core/AOT fixture and Electrobun
+reference must qualify before paired capture runs proceed.
+
+After the workflow is present on the target branch, dispatch
+`benchmark-comparison.yml` with `visible-pairs=0` for smoke qualification or
+`visible-pairs=10` for ten alternating pairs after warmups and A/A controls. The
+optional `visible-stream=true` is a separate smoke-only stream feasibility
+check on macOS 26; the normal smoke and pairs use macOS 15. Reports retain all
+failures and screenshots; they require a hosted macOS runner and paths within its
+temporary directory. Capture timing includes observer
+overhead and is not physical display presentation. Matching the displayed fixture
+does not establish complete workload equivalence or a market-wide ranking.

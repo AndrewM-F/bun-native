@@ -250,6 +250,7 @@ const declared: Partial<Record<FixtureName, readonly string[]>> = {
   // The workload manifests bind every shared workload helper, imported or not.
   'react-workload': [
     'benchmarks/solid/ownership.ts',
+    'benchmarks/solid/input-scenario.ts',
     'benchmarks/solid/retention-evidence.ts',
     'benchmarks/solid/sources.ts',
     'benchmarks/solid/workload.ts',
