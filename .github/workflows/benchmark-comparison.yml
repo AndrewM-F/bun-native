@@ -1772,6 +1772,8 @@ jobs:
           New-Item -ItemType Directory -Path $evidence -Force | Out-Null
           $paths = @(
             'build.ninja', 'bun-profile.exe.rsp', 'bun-profile.exe.lazy.rsp',
+            'bun-profile.exe.trim-work/first.map', 'bun-profile.exe.trim-work/first.symbols.map',
+            'deps/WebKit/icu/source/data/out/tmp/icudt79l_dat.obj',
             'obj/vendor/WebKit/Source/WTF/wtf/bun/RunLoopBun.cpp.obj',
             'obj/deps/WebKit/JavaScriptCore/DerivedSources/unified-sources/UnifiedSource-runtime-28.cpp.obj'
           )
