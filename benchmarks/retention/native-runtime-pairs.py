@@ -53,17 +53,29 @@ def build_schedule(pair_count, performance):
     return schedule
 
 
+def mode_settings(args):
+    if args not in (
+        [],
+        ["--calibration"],
+        ["--performance"],
+        ["--aot-jit-present"],
+        ["--aot-jit-present-calibration"],
+    ):
+        raise ValueError("Unexpected arguments")
+    aot = args in (["--aot-jit-present"], ["--aot-jit-present-calibration"])
+    calibration = args in (["--calibration"], ["--aot-jit-present-calibration"])
+    performance = args == ["--performance"]
+    mounts = 2 if calibration else 100
+    iterations = 1000 if performance or (aot and not calibration) else 20
+    return aot, calibration, performance, mounts, iterations
+
+
 def main():
     if os.name != "nt" or os.environ.get("GITHUB_ACTIONS") != "true":
         raise ValueError("Native control requires a disposable Windows Actions runner")
     if any(key.startswith("BUN_JSC_") for key in os.environ):
         raise ValueError("Unexpected inherited JSC options")
-    if sys.argv[6:] not in ([], ["--calibration"], ["--performance"]):
-        raise ValueError("Unexpected arguments")
-    calibration = sys.argv[6:] == ["--calibration"]
-    performance = sys.argv[6:] == ["--performance"]
-    mounts = 2 if calibration else 100
-    iterations = 1000 if performance else 20
+    aot, calibration, performance, mounts, iterations = mode_settings(sys.argv[6:])
     pair_count = 12 if performance else 3
     host, module, baseline, candidate = [
         Path(x).resolve(strict=True) for x in sys.argv[1:5]
@@ -82,7 +94,7 @@ def main():
                 "order": "alternating AB/BA; one baseline A/A pair after every two AB pairs"
                 if performance
                 else "AB/BA/AB",
-                "scope": f"Actual native React development workload, {iterations} updates and rotations, {mounts} mount cycles, calibration={calibration}, DFG {'default' if performance else 'disabled'}; not an AOT or cross-product performance qualification.",
+                "scope": f"Actual native React {'JIT-present compiled-program diagnostic' if aot else 'development'} workload, {iterations} updates and rotations, {mounts} mount cycles, calibration={calibration}, DFG {'default' if performance or aot else 'disabled'}; not trimmed AOT or cross-product performance qualification.",
             },
             indent=2,
         )
@@ -96,9 +108,10 @@ def main():
         dest.mkdir()
         report = dest / "result.json"
         nonce = str(uuid.uuid4())
-        command = [
-            str(runtimes[name]),
-            str(module),
+        command = [str(runtimes[name])]
+        if not aot:
+            command.append(str(module))
+        command += [
             "--host",
             str(host),
             "--output",
@@ -106,7 +119,7 @@ def main():
             "--nonce",
             nonce,
             "--mode",
-            "development",
+            "aot" if aot else "development",
             "--iterations",
             str(iterations),
             "--rotations",
@@ -119,7 +132,7 @@ def main():
         if calibration:
             command.append("--calibration")
         env = dict(os.environ)
-        if not performance:
+        if not performance and not aot:
             env["BUN_JSC_useDFGJIT"] = "0"
         env.pop("BUN_NATIVE_EVIDENCE_LOG", None)
         env.pop("BUN_NATIVE_EVIDENCE_NONCE", None)
@@ -163,7 +176,7 @@ def main():
             record["valid"] = (
                 data.get("nonce") == nonce
                 and data.get("adapter") == "react"
-                and data.get("declaredMode") == "development"
+                and data.get("declaredMode") == ("aot" if aot else "development")
                 and data.get("bunRevision") == revision
                 and str(data.get("executable", "")).lower()
                 == str(runtimes[name]).lower()

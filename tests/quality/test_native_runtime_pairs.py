@@ -27,6 +27,18 @@ def report(nonce="same"):
 
 
 class NativeRuntimePairsTest(unittest.TestCase):
+    def test_jit_present_aot_modes_are_explicit_and_separate(self):
+        self.assertEqual(PAIRS.mode_settings([]), (False, False, False, 100, 20))
+        self.assertEqual(
+            PAIRS.mode_settings(["--aot-jit-present"]), (True, False, False, 100, 1000)
+        )
+        self.assertEqual(
+            PAIRS.mode_settings(["--aot-jit-present-calibration"]),
+            (True, True, False, 2, 20),
+        )
+        with self.assertRaises(ValueError):
+            PAIRS.mode_settings(["--aot-jit-present", "--performance"])
+
     def test_schedule_alternates_and_interleaves_independent_aa_pairs(self):
         schedule = PAIRS.build_schedule(12, True)
         self.assertEqual(len(schedule), 36)
