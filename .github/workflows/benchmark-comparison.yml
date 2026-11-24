@@ -1579,9 +1579,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
         run: |
-          if ($env:RUNTIME_BUILD_RUN -ne '45431349723') { throw 'Unexpected native trim build run' }
+          if ($env:RUNTIME_BUILD_RUN -ne '45464029649') { throw 'Unexpected native trim build run' }
           $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne 'c5607760ae153b2d71211bb949f34c0252a2c25f' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected native trim build identity' }
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne 'a8823e4d739e8efb8fb3efc8f4e4ae6020150d9e' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected native trim build identity' }
           $root = Join-Path $env:RUNNER_TEMP 'native-trim-comparison'
           New-Item -ItemType Directory $root | Out-Null
           $run | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $root 'build-run.json')
