@@ -17,6 +17,8 @@ import sys
 import uuid
 from pathlib import Path
 
+STAGES = (("aa", 12), ("paired", 24))
+
 
 def sha(path):
     with path.open("rb") as stream:
@@ -161,14 +163,21 @@ def main():
         "artifacts": artifacts,
         "platform": platform.platform(),
         "machine": platform.machine(),
+        "cpuModels": sorted(
+            {
+                line.split(":", 1)[1].strip()
+                for line in Path("/proc/cpuinfo").read_text().splitlines()
+                if line.startswith("model name") and ":" in line
+            }
+        ),
         "cache": "OS page cache uncontrolled; each input launch is a fresh process",
-        "ordering": "6 baseline/baseline pairs then 12 alternating baseline/candidate pairs",
+        "ordering": "12 baseline/baseline pairs then 24 alternating baseline/candidate pairs",
         "expected": expectations,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     records = []
     renderer_identity = None
-    for stage, count in (("aa", 6), ("paired", 12)):
+    for stage, count in STAGES:
         for trial in range(count):
             order = (
                 ("base", "base")
@@ -296,7 +305,7 @@ def main():
     if not all(row["valid"] for row in records):
         raise SystemExit("At least one launch failed; all observations were retained")
     summaries = {}
-    for stage, count in (("aa", 6), ("paired", 12)):
+    for stage, count in STAGES:
         ratios = []
         for trial in range(count):
             pair = [
