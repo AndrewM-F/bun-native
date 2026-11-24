@@ -230,9 +230,12 @@ describe('application error paths (scripted headless subprocess)', () => {
     withScripted(async (app) => {
       const window = await app.openWindow({ title: 'Queued work' })
       const batch = window.batch((tree) => tree.create({ kind: 'box' }))
+      const group = Reflect.get(app, 'openGroup') as { entries: unknown[] }
+      expect(group.entries).toHaveLength(1)
       const read = window.readClipboardText()
       const stopping = app.shutdown()
       await assert.rejects(batch, /Transaction cancelled during shutdown/)
+      expect(group.entries).toHaveLength(0)
       await assert.rejects(
         read,
         (error: unknown) =>

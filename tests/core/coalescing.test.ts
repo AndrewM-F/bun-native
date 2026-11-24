@@ -72,6 +72,25 @@ test('batches queued behind one in flight share one native batch and settle in o
     await window.close()
   }))
 
+test('settled batch groups release their queued promise owners', () =>
+  withApp(async (app) => {
+    const window = await app.openWindow({ title: 'Released batch owners' })
+    const label = await labelled(window)
+    const queued: Promise<unknown>[] = []
+    let group: { entries: unknown[] } | undefined
+    await window.batch((batch) => {
+      batch.set(label, { kind: 'text', text: 'Start' })
+      queued.push(window.batch(() => ({ result: 'first' })))
+      queued.push(window.batch(() => ({ result: 'second' })))
+      group = Reflect.get(app, 'openGroup') as { entries: unknown[] }
+      expect(group.entries).toHaveLength(2)
+    })
+    expect(await Promise.all(queued)).toEqual([{ result: 'first' }, { result: 'second' }])
+    expect(group!.entries).toHaveLength(0)
+    expect(app.diagnostics.queuedTransactions).toBe(0)
+    await window.close()
+  }))
+
 test('an operation queued between two batches keeps them in separate native batches', () =>
   withApp(async (app) => {
     const one = await app.openWindow({ title: 'One' })

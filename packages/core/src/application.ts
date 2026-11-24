@@ -333,11 +333,19 @@ class Application implements NativeApplication {
     run.then(
       (release) => {
         this.queued -= group.entries.length - 1
-        release()
+        try {
+          release()
+        } finally {
+          group.entries.length = 0
+        }
       },
       (error: unknown) => {
         this.queued -= group.entries.length - 1
-        for (const queued of group.entries) queued.reject(error)
+        try {
+          for (const queued of group.entries) queued.reject(error)
+        } finally {
+          group.entries.length = 0
+        }
       }
     )
     this.openGroup = group

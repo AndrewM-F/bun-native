@@ -1,5 +1,6 @@
 """Contract checks for the isolated core ownership diagnostic."""
 
+import hashlib
 import importlib.util
 import unittest
 from pathlib import Path
@@ -13,6 +14,16 @@ spec.loader.exec_module(CONTROL)
 
 
 class CoreOwnershipControlTests(unittest.TestCase):
+    def test_group_control_reconstructs_pinned_baseline(self):
+        candidate = (ROOT / "packages/core/src/application.ts").read_text()
+        baseline = CONTROL.original_application(candidate)
+        self.assertEqual(
+            hashlib.sha256(baseline.encode()).hexdigest(),
+            "c4169633cf81c76e0163e7eaef67585cd55781c08ce51c615a3f1beb2a4c9600",
+        )
+        with self.assertRaises(ValueError):
+            CONTROL.original_application(baseline)
+
     def test_variants_preserve_checkpoints_and_pin_the_correct_target(self):
         source = (ROOT / "benchmarks/solid/direct.ts").read_text()
         baseline = CONTROL.variant_source(source, "baseline")
