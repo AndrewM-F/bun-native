@@ -51,6 +51,20 @@ class SourceGuardTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     TRIM.modify(invalid)
 
+    def test_native_coff_search_addition_requires_exact_source(self):
+        marker = b'  const libraryFolders = [\n    ...getFlagValues("/libpath:"),'
+        with self.assertRaises(ValueError):
+            TRIM.modify_coff(marker)
+        with patch.object(
+            TRIM,
+            "sha",
+            return_value="0c3456653c73da79e97ee9b3481ee0e280420ed0ed87960af3768d6af1e50052",
+        ):
+            self.assertIn(b"process.env.LIB", TRIM.modify_coff(marker))
+            for invalid in (b"missing", marker + marker):
+                with self.assertRaises(ValueError):
+                    TRIM.modify_coff(invalid)
+
 
 if __name__ == "__main__":
     unittest.main()
