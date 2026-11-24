@@ -97,6 +97,30 @@ class CollectorPathTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ANALYZE.trace_paths(trace, [3], scan_slots=True)
 
+    def test_clear_bounds_are_ranges_not_retaining_edges(self):
+        with tempfile.TemporaryDirectory() as temp:
+            trace = Path(temp) / "trace.bin"
+            write_trace(
+                trace,
+                [
+                    (100, 1, 1, 0),
+                    (1, 2, 3, 0),
+                    (2, 3, 2, 0),
+                    (120, 1, 4, 0),
+                    (100, 200, 5, 0),
+                    (100, 200, 6, 0),
+                    (110, 130, 9, 0),
+                    (150, 158, 10, 0),
+                ],
+            )
+            result = ANALYZE.trace_paths(
+                trace, [3, 130], scan_slots=True, scan_origins=True, clear_bounds=True
+            )
+            slot = result["paths"][0]["path"][0]["candidateSlots"][0]
+            self.assertEqual(slot["insideClearRanges"], [["0x6e", "0x82"]])
+            self.assertEqual(result["frameAnchors"], [["0x96", "0x9e"]])
+            self.assertIsNone(result["paths"][1]["path"])
+
 
 if __name__ == "__main__":
     unittest.main()

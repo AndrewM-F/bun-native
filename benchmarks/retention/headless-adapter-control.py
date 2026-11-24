@@ -17,8 +17,14 @@ from pathlib import Path
 
 
 def inspect_collector_traces(
-    directory, normal_edges=False, scan_slots=False, scan_origins=False
+    directory,
+    normal_edges=False,
+    scan_slots=False,
+    scan_origins=False,
+    clear_bounds=False,
 ):
+    if clear_bounds and not scan_origins:
+        raise ValueError("Clear-bound tracing requires origin tracing")
     if scan_origins and not scan_slots:
         raise ValueError("Origin tracing requires slot tracing")
     if scan_slots and not normal_edges:
@@ -26,6 +32,8 @@ def inspect_collector_traces(
     expected_kinds = (
         {1, 2, 3, 4, 5} if scan_slots else {1, 2, 3} if normal_edges else {1, 2}
     )
+    if clear_bounds:
+        expected_kinds |= {9, 10}
     allowed_kinds = expected_kinds | ({6, 7, 8} if scan_origins else set())
     files = sorted(directory.glob("bn-gc-*.bin"))
     if not files:
@@ -221,6 +229,7 @@ def main():
     normal_edges = os.environ.get("BN_COLLECTOR_TRACE_NORMAL_EDGES") == "1"
     scan_slots = os.environ.get("BN_COLLECTOR_TRACE_SCAN_SLOTS") == "1"
     scan_origins = os.environ.get("BN_COLLECTOR_TRACE_SCAN_ORIGINS") == "1"
+    clear_bounds = os.environ.get("BN_COLLECTOR_TRACE_CLEAR_BOUNDS") == "1"
     stack_preload = os.environ.get("BN_COLLECTOR_TRACE_STACK_PRELOAD")
     if normal_edges and not trace_requested:
         raise ValueError("Normal-edge tracing requires collector tracing")
@@ -228,6 +237,8 @@ def main():
         raise ValueError("Slot tracing requires normal-edge tracing")
     if scan_origins and not scan_slots:
         raise ValueError("Origin tracing requires slot tracing")
+    if clear_bounds and not scan_origins:
+        raise ValueError("Clear-bound tracing requires origin tracing")
     if stack_preload and (
         not scan_slots
         or not Path(stack_preload).is_file()
@@ -259,6 +270,7 @@ def main():
         "collectorTraceNormalEdges": normal_edges,
         "collectorTraceScanSlots": scan_slots,
         "collectorTraceScanOrigins": scan_origins,
+        "collectorTraceClearBounds": clear_bounds,
         "stackPreloadSha256": digest(Path(stack_preload)) if stack_preload else None,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
@@ -274,6 +286,7 @@ def main():
             env.pop("BN_COLLECTOR_TRACE_NORMAL_EDGES", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_SLOTS", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_ORIGINS", None)
+            env.pop("BN_COLLECTOR_TRACE_CLEAR_BOUNDS", None)
             env.pop("BN_COLLECTOR_TRACE_STACK_PRELOAD", None)
             env.pop("BN_COLLECTOR_TRACE_DIR", None)
             trace_directory = output / f"{trial:02}-{mode}-collector-trace"
@@ -340,6 +353,7 @@ def main():
                         normal_edges=normal_edges,
                         scan_slots=scan_slots,
                         scan_origins=scan_origins,
+                        clear_bounds=clear_bounds,
                     )
                     if trace_requested and mode == "development"
                     else None

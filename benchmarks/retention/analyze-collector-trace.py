@@ -13,7 +13,11 @@ import struct
 from pathlib import Path
 
 
-def trace_paths(path, targets, scan_slots=False, scan_origins=False):
+def trace_paths(
+    path, targets, scan_slots=False, scan_origins=False, clear_bounds=False
+):
+    if clear_bounds and not scan_origins:
+        raise ValueError("Clear-bound tracing requires origin tracing")
     if scan_origins and not scan_slots:
         raise ValueError("Origin tracing requires slot tracing")
     data = path.read_bytes()
@@ -35,6 +39,8 @@ def trace_paths(path, targets, scan_slots=False, scan_origins=False):
     slots = collections.defaultdict(set)
     spans = set()
     origins = collections.defaultdict(set)
+    clear_ranges = set()
+    frame_anchors = set()
     kinds = set()
     for source, target, kind, reserved in struct.iter_unpack(
         "<QQII", memoryview(data)[40:]
@@ -43,7 +49,9 @@ def trace_paths(path, targets, scan_slots=False, scan_origins=False):
             not target
             or kind
             not in (
-                {1, 2, 3, 4, 5, 6, 7, 8}
+                {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+                if clear_bounds
+                else {1, 2, 3, 4, 5, 6, 7, 8}
                 if scan_origins
                 else {1, 2, 3, 4, 5}
                 if scan_slots
@@ -75,7 +83,13 @@ def trace_paths(path, targets, scan_slots=False, scan_origins=False):
                     8: "copied-thread-stacks",
                 }[kind]
             )
+        elif kind in (9, 10):
+            if not source or source >= target:
+                raise ValueError("Invalid clear range or frame anchor")
+            (clear_ranges if kind == 9 else frame_anchors).add((source, target))
     expected = {1, 2, 3, 4, 5} if scan_slots else {1, 2, 3}
+    if clear_bounds:
+        expected |= {9, 10}
     if not expected.issubset(kinds) or (
         scan_origins and not kinds.intersection({6, 7, 8})
     ):
@@ -117,6 +131,14 @@ def trace_paths(path, targets, scan_slots=False, scan_origins=False):
                     }
                     for slot in sorted(slots[found])
                 ]
+                if clear_bounds:
+                    for slot_record in root["candidateSlots"]:
+                        slot = int(slot_record["slot"], 16)
+                        slot_record["insideClearRanges"] = [
+                            [hex(start), hex(end)]
+                            for start, end in sorted(clear_ranges)
+                            if start <= slot < end
+                        ]
             path_records = [root]
             while found != target:
                 found, kind = child[found]
@@ -127,7 +149,14 @@ def trace_paths(path, targets, scan_slots=False, scan_origins=False):
                     }
                 )
         paths.append({"target": hex(target), "path": path_records})
-    return {"file": str(path), "epoch": epoch, "records": written, "paths": paths}
+    return {
+        "file": str(path),
+        "epoch": epoch,
+        "records": written,
+        "paths": paths,
+        "clearRanges": [[hex(a), hex(b)] for a, b in sorted(clear_ranges)],
+        "frameAnchors": [[hex(a), hex(b)] for a, b in sorted(frame_anchors)],
+    }
 
 
 def main():
@@ -136,6 +165,7 @@ def main():
     parser.add_argument("target", nargs="+", type=lambda value: int(value, 0))
     parser.add_argument("--scan-slots", action="store_true")
     parser.add_argument("--scan-origins", action="store_true")
+    parser.add_argument("--clear-bounds", action="store_true")
     args = parser.parse_args()
     print(
         json.dumps(
@@ -144,6 +174,7 @@ def main():
                 args.target,
                 scan_slots=args.scan_slots,
                 scan_origins=args.scan_origins,
+                clear_bounds=args.clear_bounds,
             ),
             indent=2,
         )

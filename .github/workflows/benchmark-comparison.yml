@@ -46,6 +46,7 @@ on:
             'runtime-slot-trace-build',
             'runtime-origin-trace-build',
             'runtime-clear-trace-build',
+            'runtime-clear-trace-compare',
             'runtime-origin-trace-compare',
             'runtime-slot-trace-compare',
             'runtime-slot-stack-compare',
@@ -554,6 +555,65 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-origin-collector-trace-comparison
+          path: |
+            ${{ runner.temp }}/collector-trace-comparison/
+            !${{ runner.temp }}/collector-trace-comparison/**/*.exe
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-runtime-clear-trace-compare:
+    name: Compare conservative slots with clear bounds on Windows
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-clear-trace-compare' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - name: Verify and download the pinned instrumented runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_BUILD_RUN: ${{ inputs.runtime-build-run }}
+        run: |
+          if ($env:RUNTIME_BUILD_RUN -ne '45347442752') { throw 'Unexpected trace build run' }
+          $run = gh run view $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or $run.headSha -ne '1df66f772049a543b6396fadcf9e8d7933330a57' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Trace runtime build identity or status did not match' }
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          gh run download $env:RUNTIME_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name windows-clear-collector-trace-runtime --dir (Join-Path $root 'runtime')
+          if ($LASTEXITCODE -ne 0) { throw 'Trace runtime download failed' }
+          $binary = @(Get-ChildItem (Join-Path $root 'runtime') -Filter bun.exe -File -Recurse)
+          $manifests = @(Get-ChildItem (Join-Path $root 'runtime') -Filter collector-trace-adjustments.json -File -Recurse)
+          if ($binary.Count -ne 1 -or $manifests.Count -ne 1) { throw 'Expected one trace runtime and manifest' }
+          $manifest = Get-Content -Raw -LiteralPath $manifests[0].FullName | ConvertFrom-Json
+          if ($manifest.headerSha256 -ne '18996262a48ecdffd789761c6283a9bcd2b55b955415f89bd44da041987054db' -or $manifest.originalSha256[0] -ne '22102e605c012f0134a35c1191f7f4ebb159836fcc8dd078103abcf5de26ff3f' -or $manifest.originalSha256[1] -ne '4d8bff93828c52d141a631f2c261a349b0c122b0aab81290262566d339ff901b' -or $manifest.originalSha256[2] -ne '691b8688cc95a88ae35832dd9b58b368914ad12c89ea8532977ea33e6226d45e') { throw 'Trace source identity did not match' }
+          if ($manifest.instrumentedSha256[0] -ne 'f24314f568f9b94afb00b45f230e992b98f6def7fc5878f1b4998b44f2be62c7' -or $manifest.instrumentedSha256[1] -ne 'ab43073e2cff7a684ed44c78656af077db836e1c0927f63b65406d940a7ce9f9' -or $manifest.instrumentedSha256[2] -ne 'c4c531ea82017f58c2c58bdfeb4793358be93ed510316a2301d4f81dd09676c0') { throw 'Trace instrumentation did not match the reviewed source' }
+          if (($manifest.eventKinds -join ',') -ne '1,2,3,4,5,6,7,8,9,10') { throw 'Expected normal-edge collector instrumentation' }
+          if ($manifest.conservativeHeaderSha256 -ne '54e6ffb065b6859bda36ce66305da5aefbbc91bdde6ff60aef57c184ea675e16') { throw 'Unexpected conservative scanner declaration' }
+          if ($manifest.machineStackSha256 -ne '52bc4c9e4d1fa58730a19b8370cadbedf728e812a444a36f1a2e1cf685021641') { throw 'Unexpected machine scanner instrumentation' }
+          "SOURCE_RUNTIME=$($binary[0].FullName)" >> $env:GITHUB_ENV
+      - name: Compare pinned and instrumented development runtimes
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'collector-trace-comparison'
+          bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
+          $pinned = (Get-Command bun -CommandType Application).Source
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace --collector-normal-edges --collector-scan-slots --collector-scan-origins --collector-clear-bounds
+          if ($LASTEXITCODE -ne 0) { throw 'A runtime or trace control was invalid' }
+      - name: Retain controls and bounded traces
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-clear-collector-trace-comparison
           path: |
             ${{ runner.temp }}/collector-trace-comparison/
             !${{ runner.temp }}/collector-trace-comparison/**/*.exe
