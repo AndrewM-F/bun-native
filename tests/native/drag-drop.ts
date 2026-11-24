@@ -408,11 +408,26 @@ async function qualification() {
           }
           await Bun.sleep(25)
         }
+        // Diagnostic only: preserve the original timeout, then test whether a
+        // fresh movement within the same target causes AppKit to deliver entry.
+        let recoveryMotion: unknown = null
+        if (lateEntryMs === null) {
+          try {
+            const first = await xdnd.send('move 129 150')
+            const second = await xdnd.send('move 130 150')
+            const until = performance.now() + 2_000
+            while (log.length === mark && performance.now() < until) await Bun.sleep(25)
+            recoveryMotion = { first, second, entered: log.length > mark, events: log.slice(mark) }
+          } catch (motionError) {
+            recoveryMotion = { error: String(motionError) }
+          }
+        }
         console.error(
           'AppKit large-list entry evidence:',
           JSON.stringify({
             sourceEntry: largeListEntry,
             lateEntryMs,
+            recoveryMotion,
             currentWindow,
             activeTargets: [left.active, right.active, inner.active],
           }).slice(0, 2_000)
