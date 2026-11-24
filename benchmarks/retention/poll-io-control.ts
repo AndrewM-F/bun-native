@@ -36,6 +36,7 @@ await new Promise<void>((resolve, reject) => {
   client.once('error', reject)
   client.once('connect', () => send())
   client.on('data', (chunk) => {
+    if (typeof chunk === 'string') return reject(new Error('Unexpected text-mode socket data'))
     pending = Buffer.concat([pending, chunk])
     while (pending.length >= 8) {
       const received = pending.readBigUInt64LE()

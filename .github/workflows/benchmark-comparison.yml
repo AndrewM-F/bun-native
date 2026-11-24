@@ -1660,7 +1660,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CRT control compilation failed' }
           clang-cl /nologo -fuse-ld=lld control.obj /Fecontrol.exe /link /machine:x64 /lldmap:control.lldmap /map:control.map
           if ($LASTEXITCODE -ne 0) { throw 'CRT control link failed' }
-          & ./control.exe *> control-output.log
+          & (Join-Path $root 'control.exe') *> control-output.log
           if ($LASTEXITCODE -ne 0) { throw 'CRT control execution failed' }
           Set-Location $env:GITHUB_WORKSPACE
           bun benchmarks/retention/coff-lib-preflight.ts (Join-Path $env:GITHUB_WORKSPACE 'bun-source') $root (Join-Path $root 'results.json')
