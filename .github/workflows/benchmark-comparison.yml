@@ -54,6 +54,7 @@ on:
             'runtime-libuv-poll-clear-trim-compare',
             'runtime-libuv-native-trim-compare',
             'runtime-coff-lib-preflight',
+            'runtime-coff-neutral-preflight',
             'runtime-libuv-poll-clear-build',
             'runtime-libuv-poll-clear-compare',
             'runtime-libuv-poll-clear-calibration',
@@ -1673,6 +1674,85 @@ jobs:
           path: |
             ${{ runner.temp }}/coff-lib-preflight/
             !${{ runner.temp }}/coff-lib-preflight/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-runtime-coff-neutral-preflight:
+    name: Validate neutral COFF data graph
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && inputs.retention-diagnostic == 'runtime-coff-neutral-preflight' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-toolchain
+        with:
+          rust: 'false'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          repository: oven-sh/bun
+          ref: b1007f1177fd402fae67387b8548cae5ae9b5707
+          path: bun-source
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Link captured ICU data and compare graph readers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'coff-neutral-preflight'
+          New-Item -ItemType Directory $root | Out-Null
+          "EVIDENCE=$root" >> $env:GITHUB_ENV
+          $run = gh run view 45420316337 --repo $env:GITHUB_REPOSITORY --json status,conclusion,headSha,event,workflowName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'failure' -or $run.headSha -ne 'ccd0b713b623e3ff43d331230f59b2fbf839b1b6' -or $run.event -ne 'workflow_dispatch' -or $run.workflowName -ne 'Benchmark comparison') { throw 'Unexpected ICU capture run' }
+          gh run download 45420316337 --repo $env:GITHUB_REPOSITORY --name windows-libuv-poll-clear-trim-runtime --dir (Join-Path $root 'capture')
+          if ($LASTEXITCODE -ne 0) { throw 'ICU capture download failed' }
+          $object = @(Get-ChildItem (Join-Path $root 'capture') -Recurse -File -Filter icudt79l_dat.obj)
+          if ($object.Count -ne 1 -or (Get-FileHash $object[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ne '645a5c891c411d57f61f1aa46db22e01d589197b056bd5998ad8c457cd12eb0b') { throw 'ICU object identity mismatch' }
+          Copy-Item $object[0].FullName (Join-Path $root 'icu.obj')
+          Remove-Item -Recurse -Force (Join-Path $root 'capture')
+          . (Join-Path $env:GITHUB_WORKSPACE 'bun-source/scripts/vs-shell.ps1')
+          $env:PATH = 'C:\Program Files\LLVM\bin;' + $env:PATH
+          Set-Location $root
+          @'
+          #include <stdio.h>
+          extern const unsigned char icudt79_dat[];
+          int main(void) { printf("%u\n", (unsigned)icudt79_dat[0]); return 0; }
+          '@ | Set-Content -Encoding ascii control.c
+          clang-cl /nologo /MT /c control.c /Focontrol.obj
+          if ($LASTEXITCODE -ne 0) { throw 'ICU control compilation failed' }
+          clang-cl /nologo -fuse-ld=lld control.obj icu.obj /Fecontrol.exe /link /machine:x64 /lldmap:control.lldmap /map:control.map
+          if ($LASTEXITCODE -ne 0) { throw 'ICU control link failed' }
+          & (Join-Path $root 'control.exe') *> control-output.log
+          if ($LASTEXITCODE -ne 0) { throw 'ICU control execution failed' }
+          Set-Location $env:GITHUB_WORKSPACE
+          $source = Join-Path $env:GITHUB_WORKSPACE 'bun-source'
+          bun benchmarks/retention/coff-neutral-preflight.ts $source $root (Join-Path $root 'original.json') reject
+          if ($LASTEXITCODE -ne 0) { throw 'Original parser did not reproduce ICU failure' }
+          python benchmarks/retention/instrument-native-trim.py $source (Join-Path $env:RUNNER_TEMP 'native-trim-neutral.json') --native-lib --neutral-data
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned parser adjustment failed' }
+          bun benchmarks/retention/coff-neutral-preflight.ts $source $root (Join-Path $root 'adjusted.json') accept
+          if ($LASTEXITCODE -ne 0) { throw 'Adjusted parser did not accept ICU graph' }
+      - name: Retain maps and comparison
+        if: ${{ always() && env.EVIDENCE != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-coff-neutral-preflight
+          path: |
+            ${{ runner.temp }}/coff-neutral-preflight/
+            !${{ runner.temp }}/coff-neutral-preflight/*.exe
+            !${{ runner.temp }}/coff-neutral-preflight/icu.obj
+            ${{ runner.temp }}/native-trim-neutral.json
           if-no-files-found: warn
           retention-days: 30
 

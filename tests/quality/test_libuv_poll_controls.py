@@ -51,6 +51,18 @@ class SourceGuardTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     TRIM.modify(invalid)
 
+    def test_neutral_data_control_requires_exact_source(self):
+        marker = b"    } else if (machine !== 0x8664 && machine !== 0xaa64) return undefined;\n    return new CoffObject(fd, base, header);"
+        with self.assertRaises(ValueError):
+            TRIM.modify_neutral_objects(marker)
+        with patch.object(TRIM, "sha", return_value="f911f5a3bd16e7fe0e1c86ec523f651483e342a103abc0f8fbcc2e20b6498619"):
+            changed = TRIM.modify_neutral_objects(marker)
+            self.assertIn(b"0x20000020", changed)
+            self.assertIn(b"readUInt16LE(at + 32) !== 0", changed)
+            for invalid in (b"missing", marker + marker):
+                with self.assertRaises(ValueError):
+                    TRIM.modify_neutral_objects(invalid)
+
     def test_native_coff_search_addition_requires_exact_source(self):
         marker = b'  const libraryFolders = [\n    ...getFlagValues("/libpath:"),'
         with self.assertRaises(ValueError):
