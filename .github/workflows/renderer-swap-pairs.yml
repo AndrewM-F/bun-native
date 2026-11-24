@@ -41,13 +41,13 @@ jobs:
       - name: Checkout pinned baseline
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 8b125642bdb2a311851970d25990947033cb33af
+          ref: 841ea02653a54ea7a3e2ccdc80dbac6520e3b686
           path: .baseline
           persist-credentials: false
       - name: Verify sources and share the fixture
         run: |
           set -euo pipefail
-          base=8b125642bdb2a311851970d25990947033cb33af
+          base=841ea02653a54ea7a3e2ccdc80dbac6520e3b686
           test "$(git -C .baseline rev-parse HEAD)" = "$base"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git diff --name-only "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/renderer-swap-changed.txt"
@@ -93,7 +93,7 @@ jobs:
               --host "$GITHUB_WORKSPACE/target/release/bun-native-host" \
               --base-aot "$RUNNER_TEMP/renderer-swap-base/app" --candidate-aot "$RUNNER_TEMP/renderer-swap-candidate/app" \
               --bun "$(command -v bun)" --bun-revision "$(bun -e 'console.log(Bun.revision)')" \
-              --base-commit 8b125642bdb2a311851970d25990947033cb33af --candidate-commit "$GITHUB_SHA" \
+              --base-commit 841ea02653a54ea7a3e2ccdc80dbac6520e3b686 --candidate-commit "$GITHUB_SHA" \
               --output "$RUNNER_TEMP/renderer-swap-pairs"
       - name: Retain observations and source identities
         if: ${{ always() }}
@@ -136,13 +136,13 @@ jobs:
       - name: Checkout pinned baseline
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 8b125642bdb2a311851970d25990947033cb33af
+          ref: 841ea02653a54ea7a3e2ccdc80dbac6520e3b686
           path: .baseline
           persist-credentials: false
       - name: Verify sources and share the fixture
         run: |
           $ErrorActionPreference = 'Stop'
-          $base = '8b125642bdb2a311851970d25990947033cb33af'
+          $base = '841ea02653a54ea7a3e2ccdc80dbac6520e3b686'
           if ((git -C .baseline rev-parse HEAD) -ne $base -or (git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Wrong source identity' }
           $allowed = @('.github/workflows/renderer-swap-pairs.yml', 'benchmarks/renderer/README.md', 'benchmarks/renderer/commit.ts', 'benchmarks/renderer/swap-native.ts', 'benchmarks/renderer/swap-native-pairs.py', 'benchmarks/renderer/swap-renderer-pairs.py', 'packages/renderer/src/native-tree.ts', 'scripts/quality/native_harness/native_paint_observer.py', 'tests/quality/test_native_paint_observer.py', 'tests/renderers/incremental-commit.test.ts', 'tests/quality/test_renderer_swap_pairs.py', 'tests/quality/ci-event-coverage.test.ts')
           $changed = @(git diff --name-only $base $env:GITHUB_SHA)
@@ -169,7 +169,7 @@ jobs:
       - name: Collect renderer pairs
         run: |
           $ErrorActionPreference = 'Stop'
-          $arguments = @('--base-source', (Join-Path $env:GITHUB_WORKSPACE '.baseline'), '--candidate-source', $env:GITHUB_WORKSPACE, '--bun', (Get-Command bun).Source, '--bun-revision', (bun -e 'console.log(Bun.revision)'), '--base-commit', '8b125642bdb2a311851970d25990947033cb33af', '--candidate-commit', $env:GITHUB_SHA, '--output', (Join-Path $env:RUNNER_TEMP 'renderer-only-pairs'))
+          $arguments = @('--base-source', (Join-Path $env:GITHUB_WORKSPACE '.baseline'), '--candidate-source', $env:GITHUB_WORKSPACE, '--bun', (Get-Command bun).Source, '--bun-revision', (bun -e 'console.log(Bun.revision)'), '--base-commit', '841ea02653a54ea7a3e2ccdc80dbac6520e3b686', '--candidate-commit', $env:GITHUB_SHA, '--output', (Join-Path $env:RUNNER_TEMP 'renderer-only-pairs'))
           if ($env:RUNNER_OS -ne 'Windows') { $arguments += @('--base-aot', (Join-Path $env:RUNNER_TEMP 'renderer-only-base/app'), '--candidate-aot', (Join-Path $env:RUNNER_TEMP 'renderer-only-candidate/app')) }
           python benchmarks/renderer/swap-renderer-pairs.py @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
