@@ -68,6 +68,40 @@ class CollectorTraceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             INSTRUMENT.replace_once(b"abcabc", b"abc", b"x")
 
+    def test_slot_trace_only_instruments_development_scan_loops(self):
+        call = b"genericAddPointer<lookForWasmCallees>(*it, markingVersion, newlyAllocatedVersion, jsGCFilter, boxedWasmCalleeFilter, markHook);"
+        roots = (
+            b'#include "ConservativeRoots.h"\n'
+            b"TinyBloomFilter<uintptr_t> boxedWasmCalleeFilter, MarkHook& markHook)\n{\n    ASSERT(m_heap.worldIsStopped());\n"
+            b"        if (isJSCellKind(cellKind))\n            markHook.markKnownJSCell(static_cast<JSCell*>(p));\n"
+            + call
+            + b"\nvoid ConservativeRoots::genericAddSpan(void* begin, void* end, MarkHook& markHook)\n"
+            b"    RELEASE_ASSERT(isPointerAligned(end));\n"
+            + call
+            + b"\n"
+            + call
+            + b"\n"
+        )
+        visitor = (
+            b"WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN\n"
+            b"ALWAYS_INLINE void SlotVisitor::appendUnbarriered(JSCell* cell)\n{\n"
+            b"ALWAYS_INLINE void SlotVisitor::appendHiddenUnbarriered(JSCell* cell)\n{\n"
+        )
+        bindings = (
+            b"size_t JSC__VM__runGC(JSC::VM* vm, bool sync)\n{\n"
+            b"    JSC::JSLockHolder lock(vm);\n"
+            b"    return vm->heap.sizeAfterLastFullCollection();\n}\n"
+        )
+        adjusted, _, _ = INSTRUMENT.transform(
+            roots, visitor, bindings, normal_edges=True, scan_slots=True
+        )
+        self.assertEqual(adjusted.count(b"markHook, it);"), 2)
+        self.assertEqual(adjusted.count(call), 1)
+        self.assertIn(b"BNCollectorTraceRecord(4, bnSlot, p)", adjusted)
+        self.assertIn(b"BNCollectorTraceRecord(5, begin, end)", adjusted)
+        with self.assertRaises(ValueError):
+            INSTRUMENT.transform(roots, visitor, bindings, scan_slots=True)
+
     @unittest.skipIf(
         os.name == "nt" or not shutil.which("clang++"),
         "requires clang++ and POSIX environment",

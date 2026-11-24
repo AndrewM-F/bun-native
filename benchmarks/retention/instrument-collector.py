@@ -23,7 +23,9 @@ def replace_once(data, before, after):
     return data.replace(before, after)
 
 
-def transform(roots, visitor, bindings, normal_edges=False):
+def transform(roots, visitor, bindings, normal_edges=False, scan_slots=False):
+    if scan_slots and not normal_edges:
+        raise ValueError("Slot tracing requires normal edges")
     roots = replace_once(
         roots,
         b'#include "ConservativeRoots.h"\n',
@@ -37,6 +39,37 @@ def transform(roots, visitor, bindings, normal_edges=False):
         b"        if (isJSCellKind(cellKind))\n            markHook.markKnownJSCell(static_cast<JSCell*>(p));\n",
         b"        if (isJSCellKind(cellKind)) {\n            BNCollectorTraceRecord(1, pointer, p);\n            markHook.markKnownJSCell(static_cast<JSCell*>(p));\n        }\n",
     )
+    if scan_slots:
+        roots = replace_once(
+            roots,
+            b"TinyBloomFilter<uintptr_t> boxedWasmCalleeFilter, MarkHook& markHook)\n{\n    ASSERT(m_heap.worldIsStopped());",
+            b"TinyBloomFilter<uintptr_t> boxedWasmCalleeFilter, MarkHook& markHook, const void* bnSlot)\n{\n    ASSERT(m_heap.worldIsStopped());",
+        )
+        roots = replace_once(
+            roots,
+            b"            BNCollectorTraceRecord(1, pointer, p);\n",
+            b"            BNCollectorTraceRecord(1, pointer, p);\n            if (bnSlot) BNCollectorTraceRecord(4, bnSlot, p);\n",
+        )
+        before, span = roots.split(
+            b"void ConservativeRoots::genericAddSpan(void* begin, void* end, MarkHook& markHook)\n",
+            1,
+        )
+        marker = b"    RELEASE_ASSERT(isPointerAligned(end));\n"
+        span = replace_once(
+            span,
+            marker,
+            marker
+            + b"    if (begin && end && begin != end) BNCollectorTraceRecord(5, begin, end);\n",
+        )
+        call = b"genericAddPointer<lookForWasmCallees>(*it, markingVersion, newlyAllocatedVersion, jsGCFilter, boxedWasmCalleeFilter, markHook);"
+        if span.count(call) != 2:
+            raise ValueError("Expected two development conservative scan loops")
+        span = span.replace(call, call.replace(b"markHook);", b"markHook, it);"))
+        roots = (
+            before
+            + b"void ConservativeRoots::genericAddSpan(void* begin, void* end, MarkHook& markHook)\n"
+            + span
+        )
     visitor = replace_once(
         visitor,
         b"WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN\n",
@@ -72,11 +105,14 @@ def main():
             "Collector instrumentation requires an isolated Windows Actions checkout"
         )
     if len(sys.argv) not in (4, 5) or (
-        len(sys.argv) == 5 and sys.argv[4] != "--normal-edges"
+        len(sys.argv) == 5 and sys.argv[4] not in ("--normal-edges", "--scan-slots")
     ):
-        raise ValueError("Expected bun, webkit, manifest and optional --normal-edges")
+        raise ValueError(
+            "Expected bun, webkit, manifest and a known optional trace mode"
+        )
     bun, webkit, manifest = (Path(x).resolve() for x in sys.argv[1:4])
     normal_edges = len(sys.argv) == 5
+    scan_slots = len(sys.argv) == 5 and sys.argv[4] == "--scan-slots"
     workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
     runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if bun != workspace / "bun-source" or webkit != workspace / "webkit-source":
@@ -96,7 +132,21 @@ def main():
     original = tuple(path.read_bytes() for path in paths)
     if tuple(map(sha, original)) != expected:
         raise ValueError("Upstream collector sources differ from pinned revisions")
-    adjusted = transform(*original, normal_edges=normal_edges)
+    adjusted = transform(*original, normal_edges=normal_edges, scan_slots=scan_slots)
+    declaration_path = paths[0].with_suffix(".h")
+    declaration = None
+    if scan_slots:
+        declaration = declaration_path.read_bytes()
+        if (
+            sha(declaration)
+            != "199fd588a3891126536dbbb11445ee972154fbaabf22057d7c16e67704cf50e9"
+        ):
+            raise ValueError("Conservative roots header differs from pinned revision")
+        declaration = replace_once(
+            declaration,
+            b"TinyBloomFilter<uintptr_t> boxedWasmCalleeFilter, MarkHook&);",
+            b"TinyBloomFilter<uintptr_t> boxedWasmCalleeFilter, MarkHook&, const void* = nullptr);",
+        )
     header = paths[0].parent / "BNCollectorTraceBuffer.h"
     if header.exists() or manifest.exists():
         raise ValueError("Trace header or manifest already exists")
@@ -105,12 +155,21 @@ def main():
         "originalSha256": list(map(sha, original)),
         "instrumentedSha256": list(map(sha, adjusted)),
         "headerSha256": sha(content),
-        "eventKinds": [1, 2, 3] if normal_edges else [1, 2],
+        "eventKinds": [1, 2, 3, 4, 5]
+        if scan_slots
+        else [1, 2, 3]
+        if normal_edges
+        else [1, 2],
+        "conservativeHeaderSha256": sha(declaration)
+        if declaration is not None
+        else None,
         "scope": "Opt-in diagnostic runtime; traces conservative matches and hidden visitor calls around explicit Bun.gc. Concurrent VMs and uninstrumented paths are not attributed; missing events never prove absence and overflow invalidates the trace.",
     }
     # The checkout is ephemeral; fail on any mismatch before changing any file.
     for path, data in zip(paths, adjusted, strict=True):
         path.write_bytes(data)
+    if declaration is not None:
+        declaration_path.write_bytes(declaration)
     header.write_bytes(content)
     manifest.write_text(json.dumps(plan, indent=2) + "\n")
 
