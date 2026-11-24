@@ -1364,7 +1364,7 @@ jobs:
           $candidate = Join-Path $root 'candidate-jit-aot.exe'
           python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-calibration') --aot-jit-present-calibration "--adapter=$env:CONTROL_ADAPTER"
           if ($LASTEXITCODE -ne 0) { throw 'JIT-present native paint calibration was invalid' }
-          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-pairs') --aot-jit-present "--adapter=$env:CONTROL_ADAPTER"
+          python benchmarks/retention/native-runtime-pairs.py (Resolve-Path 'target/release/bun-native-host.exe').Path (Join-Path $root 'bundle/application.js') $baseline $candidate (Join-Path $root 'native-pairs') --aot-jit-present-extended "--adapter=$env:CONTROL_ADAPTER"
           if ($LASTEXITCODE -ne 0) { throw 'JIT-present native workload was invalid' }
       - name: Retain controls and source identities
         if: ${{ always() }}
