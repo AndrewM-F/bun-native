@@ -23,7 +23,7 @@ def replace_once(data, before, after):
     return data.replace(before, after)
 
 
-def transform(roots, visitor, bindings):
+def transform(roots, visitor, bindings, normal_edges=False):
     roots = replace_once(
         roots,
         b'#include "ConservativeRoots.h"\n',
@@ -47,6 +47,12 @@ def transform(roots, visitor, bindings):
         b"ALWAYS_INLINE void SlotVisitor::appendHiddenUnbarriered(JSCell* cell)\n{\n",
         b"ALWAYS_INLINE void SlotVisitor::appendHiddenUnbarriered(JSCell* cell)\n{\n    if (cell) BNCollectorTraceRecord(2, m_currentCell, cell);\n",
     )
+    if normal_edges:
+        visitor = replace_once(
+            visitor,
+            b"ALWAYS_INLINE void SlotVisitor::appendUnbarriered(JSCell* cell)\n{\n",
+            b"ALWAYS_INLINE void SlotVisitor::appendUnbarriered(JSCell* cell)\n{\n    if (cell) BNCollectorTraceRecord(3, m_currentCell, cell);\n",
+        )
     bindings = replace_once(
         bindings,
         b"size_t JSC__VM__runGC(JSC::VM* vm, bool sync)\n{\n    JSC::JSLockHolder lock(vm);\n",
@@ -65,7 +71,12 @@ def main():
         raise ValueError(
             "Collector instrumentation requires an isolated Windows Actions checkout"
         )
+    if len(sys.argv) not in (4, 5) or (
+        len(sys.argv) == 5 and sys.argv[4] != "--normal-edges"
+    ):
+        raise ValueError("Expected bun, webkit, manifest and optional --normal-edges")
     bun, webkit, manifest = (Path(x).resolve() for x in sys.argv[1:4])
+    normal_edges = len(sys.argv) == 5
     workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
     runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if bun != workspace / "bun-source" or webkit != workspace / "webkit-source":
@@ -85,7 +96,7 @@ def main():
     original = tuple(path.read_bytes() for path in paths)
     if tuple(map(sha, original)) != expected:
         raise ValueError("Upstream collector sources differ from pinned revisions")
-    adjusted = transform(*original)
+    adjusted = transform(*original, normal_edges=normal_edges)
     header = paths[0].parent / "BNCollectorTraceBuffer.h"
     if header.exists() or manifest.exists():
         raise ValueError("Trace header or manifest already exists")
@@ -94,6 +105,7 @@ def main():
         "originalSha256": list(map(sha, original)),
         "instrumentedSha256": list(map(sha, adjusted)),
         "headerSha256": sha(content),
+        "eventKinds": [1, 2, 3] if normal_edges else [1, 2],
         "scope": "Opt-in diagnostic runtime; traces conservative matches and hidden visitor calls around explicit Bun.gc. Concurrent VMs and uninstrumented paths are not attributed; missing events never prove absence and overflow invalidates the trace.",
     }
     # The checkout is ephemeral; fail on any mismatch before changing any file.

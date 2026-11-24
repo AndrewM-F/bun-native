@@ -26,6 +26,7 @@ class CollectorTraceTests(unittest.TestCase):
         )
         visitor = (
             b"WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN\n"
+            b"ALWAYS_INLINE void SlotVisitor::appendUnbarriered(JSCell* cell)\n{\n"
             b"ALWAYS_INLINE void SlotVisitor::appendHiddenUnbarriered(JSCell* cell)\n{\n"
         )
         bindings = (
@@ -40,6 +41,18 @@ class CollectorTraceTests(unittest.TestCase):
         self.assertIn(
             b"BNCollectorTraceRecord(2, m_currentCell, cell)", updated_visitor
         )
+        self.assertNotIn(b"BNCollectorTraceRecord(3,", updated_visitor)
+        _, normal_visitor, _ = INSTRUMENT.transform(
+            roots, visitor, bindings, normal_edges=True
+        )
+        self.assertIn(b"BNCollectorTraceRecord(3, m_currentCell, cell)", normal_visitor)
+        with self.assertRaises(ValueError):
+            INSTRUMENT.transform(
+                roots,
+                visitor.replace(b"appendUnbarriered", b"missing"),
+                bindings,
+                normal_edges=True,
+            )
         self.assertLess(
             updated_bindings.index(
                 b"BNCollectorTraceBegin();\n", updated_bindings.index(b"lock(vm)")
