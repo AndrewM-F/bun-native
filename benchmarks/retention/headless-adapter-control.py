@@ -82,6 +82,34 @@ def digest(path):
     return h.hexdigest()
 
 
+def inspect_stack_limits(directory, traces):
+    pids = set()
+    for trace in traces:
+        match = re.fullmatch(r"bn-gc-(\d+)-(\d+)\.bin", trace["file"])
+        if match is None:
+            raise ValueError("Unexpected collector trace name")
+        pids.add(int(match.group(1)))
+    if len(pids) != 1:
+        raise ValueError("Traces do not belong to one process")
+    pid = pids.pop()
+    path = directory / f"stack-limits-{pid}.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        record.get("pid") != pid
+        or not isinstance(record.get("threadId"), int)
+        or record["threadId"] <= 0
+    ):
+        raise ValueError("Invalid thread identity")
+    if not all(
+        isinstance(record.get(key), str) and record[key].isdigit()
+        for key in ("low", "high")
+    ):
+        raise ValueError("Invalid stack bounds")
+    if not 0 < int(record["low"]) < int(record["high"]) < 2**64:
+        raise ValueError("Invalid stack interval")
+    return record
+
+
 def resolve_runtime(command, expected_revision):
     executable = shutil.which(command)
     if not executable:
@@ -193,12 +221,21 @@ def main():
     normal_edges = os.environ.get("BN_COLLECTOR_TRACE_NORMAL_EDGES") == "1"
     scan_slots = os.environ.get("BN_COLLECTOR_TRACE_SCAN_SLOTS") == "1"
     scan_origins = os.environ.get("BN_COLLECTOR_TRACE_SCAN_ORIGINS") == "1"
+    stack_preload = os.environ.get("BN_COLLECTOR_TRACE_STACK_PRELOAD")
     if normal_edges and not trace_requested:
         raise ValueError("Normal-edge tracing requires collector tracing")
     if scan_slots and not normal_edges:
         raise ValueError("Slot tracing requires normal-edge tracing")
     if scan_origins and not scan_slots:
         raise ValueError("Origin tracing requires slot tracing")
+    if stack_preload and (
+        not scan_slots
+        or not Path(stack_preload).is_file()
+        or not Path(stack_preload).is_absolute()
+        or any(char.isspace() for char in stack_preload)
+        or os.environ.get("BUN_OPTIONS")
+    ):
+        raise ValueError("Invalid stack preload configuration")
     output.mkdir(parents=True, exist_ok=False)
     plan = {
         "revision": revision,
@@ -222,6 +259,7 @@ def main():
         "collectorTraceNormalEdges": normal_edges,
         "collectorTraceScanSlots": scan_slots,
         "collectorTraceScanOrigins": scan_origins,
+        "stackPreloadSha256": digest(Path(stack_preload)) if stack_preload else None,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     results = []
@@ -236,11 +274,14 @@ def main():
             env.pop("BN_COLLECTOR_TRACE_NORMAL_EDGES", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_SLOTS", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_ORIGINS", None)
+            env.pop("BN_COLLECTOR_TRACE_STACK_PRELOAD", None)
             env.pop("BN_COLLECTOR_TRACE_DIR", None)
             trace_directory = output / f"{trial:02}-{mode}-collector-trace"
             if trace_requested and mode == "development":
                 trace_directory.mkdir(exist_ok=False)
                 env["BN_COLLECTOR_TRACE_DIR"] = str(trace_directory.resolve())
+                if stack_preload:
+                    env["BUN_OPTIONS"] = f"--preload={stack_preload}"
             if require_narrow_dump:
                 env["BUN_JSC_dumpOptions"] = "3"
             for key in (
@@ -303,6 +344,11 @@ def main():
                     if trace_requested and mode == "development"
                     else None
                 )
+                stack_limits = (
+                    inspect_stack_limits(trace_directory, traces)
+                    if stack_preload and mode == "development"
+                    else None
+                )
                 valid = bool(
                     raw
                     and valid_report(
@@ -323,6 +369,7 @@ def main():
                     "cleanup": cleanup,
                     "effectiveNarrowReferenceScan": effective_scan,
                     "collectorTraces": traces,
+                    "threadStackLimits": stack_limits,
                 }
             except (
                 OSError,

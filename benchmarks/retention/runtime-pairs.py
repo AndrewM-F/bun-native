@@ -67,6 +67,7 @@ def main():
     parser.add_argument("--collector-normal-edges", action="store_true")
     parser.add_argument("--collector-scan-slots", action="store_true")
     parser.add_argument("--collector-scan-origins", action="store_true")
+    parser.add_argument("--collector-stack-limits", action="store_true")
     args = parser.parse_args()
     if args.collector_trace and not args.development_controls_only:
         raise ValueError("Collector tracing is limited to the development runtime")
@@ -76,6 +77,10 @@ def main():
         raise ValueError("Slot tracing requires normal-edge tracing")
     if args.collector_scan_origins and not args.collector_scan_slots:
         raise ValueError("Origin tracing requires slot tracing")
+    if args.collector_stack_limits and not args.collector_scan_slots:
+        raise ValueError("Stack-bound tracing requires slot tracing")
+    if args.collector_stack_limits and os.environ.get("BUN_OPTIONS"):
+        raise ValueError("Unexpected inherited Bun options")
     if not 1 <= args.pairs <= 5:
         raise ValueError("pairs must be in 1..5")
     if any(name.startswith("BUN_JSC_") for name in os.environ):
@@ -106,6 +111,7 @@ def main():
         "collectorNormalEdges": args.collector_normal_edges,
         "collectorScanSlots": args.collector_scan_slots,
         "collectorScanOrigins": args.collector_scan_origins,
+        "collectorStackLimits": args.collector_stack_limits,
     }
     (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     records = []
@@ -136,6 +142,7 @@ def main():
             env.pop("BN_COLLECTOR_TRACE_NORMAL_EDGES", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_SLOTS", None)
             env.pop("BN_COLLECTOR_TRACE_SCAN_ORIGINS", None)
+            env.pop("BN_COLLECTOR_TRACE_STACK_PRELOAD", None)
             if args.collector_trace and variant == "candidate":
                 env["BN_COLLECTOR_TRACE_REQUESTED"] = "1"
                 if args.collector_normal_edges:
@@ -144,6 +151,12 @@ def main():
                     env["BN_COLLECTOR_TRACE_SCAN_SLOTS"] = "1"
                 if args.collector_scan_origins:
                     env["BN_COLLECTOR_TRACE_SCAN_ORIGINS"] = "1"
+                if args.collector_stack_limits:
+                    env["BN_COLLECTOR_TRACE_STACK_PRELOAD"] = str(
+                        Path("benchmarks/retention/windows-stack-limits.ts").resolve(
+                            strict=True
+                        )
+                    )
             record = {
                 "trial": trial,
                 "variant": variant,

@@ -1,6 +1,7 @@
 """Controls must reject invalid or ineffective narrow-scan settings."""
 
 import importlib.util
+import json
 import struct
 import tempfile
 import unittest
@@ -17,6 +18,30 @@ SPEC.loader.exec_module(CONTROL)
 
 
 class RetentionScanDiagnosticTests(unittest.TestCase):
+    def test_stack_limits_are_bound_to_trace_process(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            traces = [{"file": "bn-gc-42-3.bin"}, {"file": "bn-gc-42-4.bin"}]
+            limits = directory / "stack-limits-42.json"
+            limits.write_text(
+                json.dumps({"pid": 42, "threadId": 7, "low": "100", "high": "200"})
+            )
+            self.assertEqual(
+                CONTROL.inspect_stack_limits(directory, traces)["threadId"], 7
+            )
+            for record in (
+                {"pid": 43, "threadId": 7, "low": "100", "high": "200"},
+                {"pid": 42, "threadId": 7, "low": "200", "high": "100"},
+                {"pid": 42, "threadId": 0, "low": "100", "high": "200"},
+            ):
+                limits.write_text(json.dumps(record))
+                with self.assertRaises(ValueError):
+                    CONTROL.inspect_stack_limits(directory, traces)
+            with self.assertRaises(ValueError):
+                CONTROL.inspect_stack_limits(
+                    directory, traces + [{"file": "bn-gc-43-4.bin"}]
+                )
+
     def test_collector_trace_rejects_missing_overflow_and_truncation(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
