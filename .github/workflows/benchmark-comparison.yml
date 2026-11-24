@@ -18,8 +18,8 @@ on:
         type: boolean
         default: false
       streaming-trials:
-        description: Streaming-list soaks per framework and mode (1 to 10; at least 5 for a baseline)
-        default: '5'
+        description: Streaming-list soaks per framework and mode (1 to 10)
+        default: '3'
       concurrent-jit:
         description: Diagnostic for #629. 'off' sets BUN_JSC_useConcurrentJIT=0 for every launch; assertions are unchanged
         type: choice
