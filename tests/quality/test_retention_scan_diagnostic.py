@@ -24,15 +24,48 @@ class RetentionScanDiagnosticTests(unittest.TestCase):
             traces = [{"file": "bn-gc-42-3.bin"}, {"file": "bn-gc-42-4.bin"}]
             limits = directory / "stack-limits-42.json"
             limits.write_text(
-                json.dumps({"pid": 42, "threadId": 7, "low": "100", "high": "200"})
+                json.dumps(
+                    {
+                        "pid": 42,
+                        "threadId": 7,
+                        "low": "100",
+                        "high": "200",
+                        "executableModuleBase": "300",
+                    }
+                )
             )
             self.assertEqual(
                 CONTROL.inspect_stack_limits(directory, traces)["threadId"], 7
             )
             for record in (
-                {"pid": 43, "threadId": 7, "low": "100", "high": "200"},
-                {"pid": 42, "threadId": 7, "low": "200", "high": "100"},
-                {"pid": 42, "threadId": 0, "low": "100", "high": "200"},
+                {
+                    "pid": 43,
+                    "threadId": 7,
+                    "low": "100",
+                    "high": "200",
+                    "executableModuleBase": "300",
+                },
+                {
+                    "pid": 42,
+                    "threadId": 7,
+                    "low": "200",
+                    "high": "100",
+                    "executableModuleBase": "300",
+                },
+                {
+                    "pid": 42,
+                    "threadId": 0,
+                    "low": "100",
+                    "high": "200",
+                    "executableModuleBase": "300",
+                },
+                {
+                    "pid": 42,
+                    "threadId": 7,
+                    "low": "100",
+                    "high": "200",
+                    "executableModuleBase": "0",
+                },
             ):
                 limits.write_text(json.dumps(record))
                 with self.assertRaises(ValueError):

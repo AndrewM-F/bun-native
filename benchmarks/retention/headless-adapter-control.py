@@ -117,11 +117,13 @@ def inspect_stack_limits(directory, traces):
         raise ValueError("Invalid thread identity")
     if not all(
         isinstance(record.get(key), str) and record[key].isdigit()
-        for key in ("low", "high")
+        for key in ("low", "high", "executableModuleBase")
     ):
         raise ValueError("Invalid stack bounds")
     if not 0 < int(record["low"]) < int(record["high"]) < 2**64:
         raise ValueError("Invalid stack interval")
+    if not 0 < int(record["executableModuleBase"]) < 2**64:
+        raise ValueError("Invalid executable module base")
     return record
 
 

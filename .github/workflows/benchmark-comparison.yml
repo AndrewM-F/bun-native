@@ -670,7 +670,7 @@ jobs:
           bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Peer build failed' }
           $pinned = (Get-Command bun -CommandType Application).Source
-          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace --collector-normal-edges --collector-scan-slots --collector-scan-origins --collector-clear-bounds --collector-unwind
+          python benchmarks/retention/runtime-pairs.py (Join-Path $root 'peer.exe') $pinned $env:SOURCE_RUNTIME (Join-Path $root 'pairs') --pairs 3 --development-controls-only --collector-trace --collector-normal-edges --collector-scan-slots --collector-scan-origins --collector-clear-bounds --collector-unwind --collector-stack-limits
           if ($LASTEXITCODE -ne 0) { throw 'A runtime or trace control was invalid' }
       - name: Retain controls and bounded traces
         if: ${{ always() }}

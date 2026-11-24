@@ -9,13 +9,16 @@ if (process.platform !== 'win32' || !directory || !isAbsolute(directory))
 const library = dlopen('kernel32.dll', {
   GetCurrentThreadStackLimits: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.void },
   GetCurrentThreadId: { args: [], returns: FFIType.u32 },
+  GetModuleHandleW: { args: [FFIType.ptr], returns: FFIType.ptr },
 })
 const bounds = new BigUint64Array(2)
 library.symbols.GetCurrentThreadStackLimits(ptr(bounds), ptr(bounds, 8))
 const threadId = library.symbols.GetCurrentThreadId()
 const low = bounds[0]!
 const high = bounds[1]!
-if (!threadId || low === 0n || high <= low) throw new Error('Invalid Windows thread stack bounds')
+const moduleHandle = library.symbols.GetModuleHandleW(null)
+if (!threadId || low === 0n || high <= low || !moduleHandle || !Number.isSafeInteger(moduleHandle))
+  throw new Error('Invalid Windows thread stack bounds or executable module')
 writeFileSync(
   join(directory, `stack-limits-${process.pid}.json`),
   JSON.stringify({
@@ -23,6 +26,7 @@ writeFileSync(
     threadId,
     low: low.toString(),
     high: high.toString(),
+    executableModuleBase: BigInt(moduleHandle).toString(),
   }) + '\n',
   { flag: 'wx' }
 )
