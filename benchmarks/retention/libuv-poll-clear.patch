@@ -1,0 +1,10 @@
+--- a/src/win/core.c
++++ b/src/win/core.c
+@@ -589,6 +589,7 @@
+     }
+     break;
+   }
++  SecureZeroMemory(overlappeds, sizeof(overlappeds));
+ }
+ 
+ 

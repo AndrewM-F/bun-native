@@ -1,4 +1,4 @@
-"""Install one source-pinned, diagnostic-only libuv inlining control."""
+"""Install one source-pinned, diagnostic-only libuv polling control."""
 
 import hashlib
 import json
@@ -11,7 +11,7 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def modify(original):
+def modify(original, mode="noinline"):
     if (
         sha(original)
         != "41a30294437a2dcb4dc0fef635aa2625afea4ae87ae12a682f46f52fa84234c0"
@@ -20,9 +20,10 @@ def modify(original):
     marker = b'    "patches/libuv/win-poll-no-reendgame-after-close.patch",\n'
     if original.count(marker) != 1:
         raise ValueError("Expected exactly one libuv patch insertion point")
-    return original.replace(
-        marker, marker + b'    "patches/libuv/diagnostic-poll-noinline.patch",\n'
-    )
+    if mode not in ("noinline", "clear"):
+        raise ValueError("Unknown poll control")
+    addition = f'    "patches/libuv/diagnostic-poll-{mode}.patch",\n'.encode()
+    return original.replace(marker, marker + addition)
 
 
 def main():
@@ -34,15 +35,21 @@ def main():
         raise ValueError("Control requires the disposable pinned Actions checkout")
     if manifest.parent != temp or manifest.exists():
         raise ValueError("Unexpected manifest path")
+    if sys.argv[3:] not in ([], ["--clear"]):
+        raise ValueError("Unknown poll control")
+    mode = "clear" if sys.argv[3:] else "noinline"
     source = root / "scripts/build/deps/libuv.ts"
     original = source.read_bytes()
-    updated = modify(original)
-    destination = root / "patches/libuv/diagnostic-poll-noinline.patch"
+    updated = modify(original, mode)
+    destination = root / f"patches/libuv/diagnostic-poll-{mode}.patch"
     if destination.exists():
         raise ValueError("Diagnostic patch already exists")
-    patch = Path("benchmarks/retention/libuv-poll-noinline.patch").read_bytes()
-    if patch.count(b"__declspec(noinline)") != 1:
-        raise ValueError("Unexpected noinline patch")
+    patch = Path(f"benchmarks/retention/libuv-poll-{mode}.patch").read_bytes()
+    marker = (
+        b"SecureZeroMemory(overlappeds" if mode == "clear" else b"__declspec(noinline)"
+    )
+    if patch.count(marker) != 1:
+        raise ValueError("Unexpected diagnostic patch")
     manifest.write_text(
         json.dumps(
             {
@@ -51,7 +58,8 @@ def main():
                 "libuvCommit": "8023581113b276e7c1aee3f82da57ca0893faab1",
                 "libuvCoreOriginalSha256": "cc4b8b7637f90322bb3e3e9b7c88a4ca03841eed8f99e0f4681a29caec1437be",
                 "diagnosticPatchSha256": sha(patch),
-                "scope": "Diagnostic-only compiler layout control; no assertions or GC behavior changed.",
+                "mode": mode,
+                "scope": "Diagnostic-only poll control; no assertions or GC behavior changed.",
             },
             indent=2,
         )

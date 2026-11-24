@@ -50,6 +50,7 @@ on:
             'runtime-unwind-preflight',
             'runtime-libuv-noinline-build',
             'runtime-libuv-native-trim-build',
+            'runtime-libuv-poll-clear-build',
             'runtime-libuv-noinline-compare',
             'runtime-libuv-native-compare',
             'runtime-libuv-native-calibration',
@@ -848,7 +849,7 @@ jobs:
 
   windows-runtime-build:
     name: Build pinned Windows runtime from source
-    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-build", "runtime-rust-symbols", "runtime-rust-relink", "runtime-force-build", "runtime-strong-build", "runtime-trace-build", "runtime-full-trace-build", "runtime-slot-trace-build", "runtime-origin-trace-build", "runtime-clear-trace-build", "runtime-unwind-build", "runtime-libuv-noinline-build", "runtime-libuv-native-trim-build"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: vars.CI_BILLING_PAUSED == 'false' && github.event_name == 'workflow_dispatch' && contains(fromJSON('["runtime-build", "runtime-rust-symbols", "runtime-rust-relink", "runtime-force-build", "runtime-strong-build", "runtime-trace-build", "runtime-full-trace-build", "runtime-slot-trace-build", "runtime-origin-trace-build", "runtime-clear-trace-build", "runtime-unwind-build", "runtime-libuv-noinline-build", "runtime-libuv-native-trim-build", "runtime-libuv-poll-clear-build"]'), inputs.retention-diagnostic) && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-2022
     timeout-minutes: 240
     permissions:
@@ -905,13 +906,15 @@ jobs:
         run: |
           $adjustArgs = @((Join-Path $env:GITHUB_WORKSPACE 'bun-source'), (Join-Path $env:GITHUB_WORKSPACE 'webkit-source'), (Join-Path $env:RUNNER_TEMP 'runtime-build-adjustments.json'))
           if ($env:RETENTION_DIAGNOSTIC -eq 'runtime-force-build') { $adjustArgs += '--force-timer' }
-          if ($env:RETENTION_DIAGNOSTIC -in @('runtime-strong-build', 'runtime-trace-build', 'runtime-full-trace-build', 'runtime-slot-trace-build', 'runtime-origin-trace-build', 'runtime-clear-trace-build', 'runtime-unwind-build', 'runtime-libuv-noinline-build', 'runtime-libuv-native-trim-build')) { $adjustArgs += '--strong-timer' }
+          if ($env:RETENTION_DIAGNOSTIC -in @('runtime-strong-build', 'runtime-trace-build', 'runtime-full-trace-build', 'runtime-slot-trace-build', 'runtime-origin-trace-build', 'runtime-clear-trace-build', 'runtime-unwind-build', 'runtime-libuv-noinline-build', 'runtime-libuv-native-trim-build', 'runtime-libuv-poll-clear-build')) { $adjustArgs += '--strong-timer' }
           python benchmarks/retention/shorten-upstream-build.py @adjustArgs
           if ($LASTEXITCODE -ne 0) { throw 'Build adjustment failed' }
       - name: Isolate the libuv poll stack frame for a diagnostic runtime
-        if: contains(fromJSON('["runtime-libuv-noinline-build", "runtime-libuv-native-trim-build"]'), inputs.retention-diagnostic)
+        if: contains(fromJSON('["runtime-libuv-noinline-build", "runtime-libuv-native-trim-build", "runtime-libuv-poll-clear-build"]'), inputs.retention-diagnostic)
         run: |
-          python benchmarks/retention/instrument-libuv-poll.py (Join-Path $env:GITHUB_WORKSPACE 'bun-source') (Join-Path $env:RUNNER_TEMP 'libuv-poll-adjustments.json')
+          $pollArgs = @((Join-Path $env:GITHUB_WORKSPACE 'bun-source'), (Join-Path $env:RUNNER_TEMP 'libuv-poll-adjustments.json'))
+          if ('${{ inputs.retention-diagnostic }}' -eq 'runtime-libuv-poll-clear-build') { $pollArgs += '--clear' }
+          python benchmarks/retention/instrument-libuv-poll.py @pollArgs
           if ($LASTEXITCODE -ne 0) { throw 'Libuv diagnostic adjustment failed' }
       - name: Enable native Windows trim-link feasibility control
         if: inputs.retention-diagnostic == 'runtime-libuv-native-trim-build'
@@ -1060,7 +1063,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ inputs.retention-diagnostic == 'runtime-libuv-native-trim-build' && 'windows-libuv-native-trim-runtime' || inputs.retention-diagnostic == 'runtime-libuv-noinline-build' && 'windows-libuv-noinline-runtime' || inputs.retention-diagnostic == 'runtime-unwind-build' && 'windows-unwind-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-clear-trace-build' && 'windows-clear-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-origin-trace-build' && 'windows-origin-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-slot-trace-build' && 'windows-slot-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-full-trace-build' && 'windows-full-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-trace-build' && 'windows-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-strong-build' && 'windows-strong-timer-diagnostic' || (inputs.retention-diagnostic == 'runtime-force-build' && 'windows-forced-timer-source-runtime') || (contains(fromJSON('["runtime-rust-symbols", "runtime-rust-relink"]'), inputs.retention-diagnostic) && 'windows-source-rust-symbols') || 'windows-uninstrumented-source-runtime' }}
+          name: ${{ inputs.retention-diagnostic == 'runtime-libuv-poll-clear-build' && 'windows-libuv-poll-clear-runtime' || inputs.retention-diagnostic == 'runtime-libuv-native-trim-build' && 'windows-libuv-native-trim-runtime' || inputs.retention-diagnostic == 'runtime-libuv-noinline-build' && 'windows-libuv-noinline-runtime' || inputs.retention-diagnostic == 'runtime-unwind-build' && 'windows-unwind-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-clear-trace-build' && 'windows-clear-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-origin-trace-build' && 'windows-origin-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-slot-trace-build' && 'windows-slot-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-full-trace-build' && 'windows-full-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-trace-build' && 'windows-collector-trace-runtime' || inputs.retention-diagnostic == 'runtime-strong-build' && 'windows-strong-timer-diagnostic' || (inputs.retention-diagnostic == 'runtime-force-build' && 'windows-forced-timer-source-runtime') || (contains(fromJSON('["runtime-rust-symbols", "runtime-rust-relink"]'), inputs.retention-diagnostic) && 'windows-source-rust-symbols') || 'windows-uninstrumented-source-runtime' }}
           path: |
             bun-source/build/release-local/bun.exe
             ${{ runner.temp }}/runtime-build-adjustments.json
