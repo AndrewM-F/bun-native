@@ -366,6 +366,7 @@ def main():
         "kind": kind,
         "compiler": compiler,
         "developmentRuntime": runtime or "bun",
+        "expectedAotJit": expected_aot_jit(os.environ),
         "usesDistributedAotReference": bool(
             os.environ.get("CONTROL_AOT_REFERENCE_COMPILER")
         ),
@@ -468,6 +469,9 @@ def main():
         # Only the separately labeled source-runtime diagnostic may require JIT
         # present. Normal AOT controls continue to require the JIT to be unused.
         expected_jit = expected_aot_jit(os.environ)
+        with binary.open("rb") as binary_file:
+            binary_hash = hashlib.file_digest(binary_file, "sha256").hexdigest()
+        (output / f"{variant}-binary-sha256.txt").write_text(binary_hash + "\n")
         inspect = f'import {{ inspectBunExecutable }} from "./scripts/native/inspect.ts"; import {{ inspectBunRuntime }} from "./scripts/native/inspect-runtime.ts"; const graph=inspectBunExecutable(process.argv[1]); const runtime=inspectBunRuntime(process.argv[1]); console.log(JSON.stringify({{graph,runtime}},null,2)); if (!graph.hasCompiledProgram || runtime.jit !== "{expected_jit}") throw new Error("Unexpected AOT or JIT inspection")'
         with (output / f"{variant}-inspection.json").open("wb") as log:
             subprocess.run(

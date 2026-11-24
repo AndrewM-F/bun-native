@@ -989,7 +989,7 @@ jobs:
           if ((Get-FileHash -Algorithm SHA256 $builds[0].binary).Hash -eq (Get-FileHash -Algorithm SHA256 $builds[1].binary).Hash) { throw 'Control binaries unexpectedly identical' }
           "BASELINE_RUNTIME=$($builds[0].binary)" >> $env:GITHUB_ENV
           "SOURCE_RUNTIME=$($builds[1].binary)" >> $env:GITHUB_ENV
-      - name: Run alternating development controls
+      - name: Run alternating JIT-present AOT and development controls
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'libuv-noinline-comparison'
           bun build tests/core/protocol-peer.ts --compile --outfile (Join-Path $root 'peer.exe')
